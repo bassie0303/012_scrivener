@@ -122,6 +122,16 @@ export default function GyoseiQuiz() {
   const [submitted, setSubmitted] = useState(false);
   const [result, setResult] = useState(null);
 
+  // 文字サイズ倍率（本文の読みやすさ。端末に保存）
+  const [fontScale, setFontScale] = useState(() => {
+    const v = parseFloat(typeof localStorage !== "undefined" && localStorage.getItem("fontScale"));
+    return v >= 0.8 && v <= 1.8 ? v : 1.15;
+  });
+  function changeFontScale(v) {
+    setFontScale(v);
+    try { localStorage.setItem("fontScale", String(v)); } catch {}
+  }
+
   // 画面（出題 / 集計）と出題フィルタ
   const [view, setView] = useState("quiz");
   const [selectedFields, setSelectedFields] = useState([]); // [] = 全分野
@@ -322,7 +332,7 @@ export default function GyoseiQuiz() {
       : synced ? "同期済み" : "サインイン済み（同期中…）";
 
   return (
-    <div style={{ background: C.bg, minHeight: "100%", fontFamily: GOTHIC, color: C.ink }}>
+    <div style={{ background: C.bg, minHeight: "100%", fontFamily: GOTHIC, color: C.ink, "--rs": fontScale }}>
       <style>{`
         @keyframes stampIn{0%{opacity:0;transform:scale(1.6) rotate(-12deg)}
           60%{opacity:1;transform:scale(.92) rotate(-12deg)}100%{transform:scale(1) rotate(-12deg)}}
@@ -342,6 +352,7 @@ export default function GyoseiQuiz() {
             ))}
           </div>
           <div className="flex items-center" style={{ gap: 8, fontSize: 11, color: C.inkSoft }}>
+            <FontSizeControl scale={fontScale} onChange={changeFontScale} />
             {source === "sample" && (
               <span style={{ color: C.shu, border: `1px solid ${C.shu}`, borderRadius: 2, padding: "2px 6px" }}>サンプル問題</span>
             )}
@@ -409,9 +420,9 @@ export default function GyoseiQuiz() {
             <OXItem entry={entry} picked={picked} submitted={submitted} onPick={judgeOX} />
           ) : (
             <>
-              <p style={{ fontFamily: MINCHO, fontSize: 16, lineHeight: 1.9, margin: "0 0 18px", whiteSpace: "pre-wrap" }}>{entry.stem}</p>
+              <p style={{ fontFamily: MINCHO, fontSize: "calc(16px * var(--rs))", lineHeight: 1.9, margin: "0 0 18px", whiteSpace: "pre-wrap" }}>{entry.stem}</p>
               {entry.reference && (
-                <div style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 3, padding: "10px 12px", fontSize: 13, lineHeight: 1.8, color: C.inkSoft, margin: "0 0 18px" }}>
+                <div style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 3, padding: "10px 12px", fontSize: "calc(13px * var(--rs))", lineHeight: 1.8, color: C.inkSoft, margin: "0 0 18px" }}>
                   <span style={{ color: C.ink, fontWeight: 700 }}>参照条文　</span>{entry.reference}
                 </div>
               )}
@@ -581,6 +592,25 @@ function AuthBar({ user, onSignOut }) {
   );
 }
 
+/* ═══════════ 文字サイズ調整 ═══════════ */
+function FontSizeControl({ scale, onChange }) {
+  const steps = [["小", 1.0], ["中", 1.15], ["大", 1.35], ["特大", 1.6]];
+  return (
+    <div className="flex items-center" style={{ gap: 2, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 6, padding: 2 }}>
+      <span style={{ fontSize: 11, color: C.inkSoft, padding: "0 4px" }} aria-hidden>字</span>
+      {steps.map(([lbl, v]) => {
+        const active = Math.abs(scale - v) < 0.001;
+        return (
+          <button key={lbl} className="opt" onClick={() => onChange(v)}
+            aria-label={`文字サイズ ${lbl}`} aria-pressed={active}
+            style={{ background: active ? C.ink : "transparent", color: active ? "#fff" : C.inkSoft,
+              border: "none", borderRadius: 4, padding: "3px 7px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: GOTHIC }}>{lbl}</button>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ═══════════ 出題条件バー（分野・学習対象・モード） ═══════════ */
 function chip(active) {
   return { background: active ? C.ink : "#fff", color: active ? "#fff" : C.inkSoft,
@@ -700,7 +730,7 @@ function OXItem({ entry, picked, submitted, onPick }) {
   return (
     <div>
       <div style={{ fontSize: 12, color: C.inkSoft, marginBottom: 8 }}>次の記述は正しいか、誤っているか。</div>
-      <p style={{ fontFamily: MINCHO, fontSize: 16, lineHeight: 1.95, margin: "0 0 18px" }}>{entry.statement}</p>
+      <p style={{ fontFamily: MINCHO, fontSize: "calc(16px * var(--rs))", lineHeight: 1.95, margin: "0 0 18px" }}>{entry.statement}</p>
       <div className="grid grid-cols-2 gap-3">
         {[["○", "正しい"], ["×", "誤り"]].map(([sym, lbl]) => {
           const isPick = picked === sym, isAnsTrue = (sym === "○") === entry.isTrue;
@@ -740,7 +770,7 @@ function Tantou({ q, picked, setPicked, submitted }) {
               border: `2px solid ${ring}`, background: fill, color: fill === "transparent" ? ring : "#fff",
               display: "inline-flex", alignItems: "center", justifyContent: "center",
               fontSize: 13, fontWeight: 700, marginTop: 1, fontFamily: MINCHO }}>{mark || n}</span>
-            <span style={{ fontFamily: MINCHO, fontSize: 14.5, lineHeight: 1.8 }}>{text}</span>
+            <span style={{ fontFamily: MINCHO, fontSize: "calc(14.5px * var(--rs))", lineHeight: 1.8 }}>{text}</span>
           </button>
         );
       })}
@@ -760,7 +790,7 @@ function Tashi({ q, blanks, setBlanks, submitted }) {
               <span style={{ fontFamily: MINCHO, fontWeight: 700, color: C.shu, width: 18 }}>{k}</span>
               <select className="opt" value={v || ""} disabled={submitted}
                 onChange={(e) => setBlanks({ ...blanks, [k]: e.target.value })}
-                style={{ flex: 1, background: "transparent", border: "none", fontFamily: GOTHIC, fontSize: 13, color: C.ink, outline: "none" }}>
+                style={{ flex: 1, background: "transparent", border: "none", fontFamily: GOTHIC, fontSize: "calc(13px * var(--rs))", color: C.ink, outline: "none" }}>
                 <option value="">— 選択 —</option>
                 {Object.entries(q.word_bank).map(([n, t]) => <option key={n} value={n}>{n}. {t}</option>)}
               </select>
@@ -772,7 +802,7 @@ function Tashi({ q, blanks, setBlanks, submitted }) {
       <div style={{ fontSize: 11, color: C.inkSoft, marginBottom: 6 }}>語群</div>
       <div className="grid grid-cols-2 gap-x-4 gap-y-1" style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 3, padding: "10px 12px" }}>
         {Object.entries(q.word_bank).map(([n, t]) => (
-          <div key={n} style={{ fontSize: 12.5, lineHeight: 1.7, color: C.inkSoft }}>
+          <div key={n} style={{ fontSize: "calc(12.5px * var(--rs))", lineHeight: 1.7, color: C.inkSoft }}>
             <span style={{ color: C.ink, fontWeight: 700 }}>{n}.</span> {t}
           </div>
         ))}
@@ -794,20 +824,20 @@ function Kijutsu({ q, revealed, setRevealed }) {
             borderRight: i % 15 !== 14 ? `1px solid ${C.line}` : "none",
             borderBottom: i < cells - 15 ? `1px solid ${C.line}` : "none",
             display: "flex", alignItems: "center", justifyContent: "center",
-            fontFamily: MINCHO, fontSize: 14, color: C.ink, background: "#fff" }}>{chars[i] || ""}</div>
+            fontFamily: MINCHO, fontSize: "calc(14px * var(--rs))", color: C.ink, background: "#fff" }}>{chars[i] || ""}</div>
         ))}
       </div>
       <textarea value={draft} onChange={(e) => setDraft(e.target.value)}
         placeholder="ここに入力するとマス目に反映されます（40字程度）" rows={2} className="opt w-full"
         style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 3, padding: "8px 10px",
-          fontFamily: MINCHO, fontSize: 13, lineHeight: 1.8, color: C.ink, resize: "vertical", marginBottom: 12 }} />
+          fontFamily: MINCHO, fontSize: "calc(13px * var(--rs))", lineHeight: 1.8, color: C.ink, resize: "vertical", marginBottom: 12 }} />
       {!revealed ? (
         <button className="opt" onClick={() => setRevealed(true)} style={{ background: "transparent",
           color: C.shu, border: `1px solid ${C.shu}`, borderRadius: 4, padding: "8px 14px", fontSize: 13, cursor: "pointer" }}>正解例を表示</button>
       ) : (
         <div style={{ background: C.shuSoft, border: "1px solid #e3b9b1", borderRadius: 4, padding: "12px 14px" }}>
           <div style={{ fontSize: 11, color: C.shu, marginBottom: 4 }}>正解例（{q.answer.length}字）</div>
-          <div style={{ fontFamily: MINCHO, fontSize: 15, lineHeight: 1.9 }}>{q.answer.model}</div>
+          <div style={{ fontFamily: MINCHO, fontSize: "calc(15px * var(--rs))", lineHeight: 1.9 }}>{q.answer.model}</div>
         </div>
       )}
     </div>
