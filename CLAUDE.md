@@ -118,14 +118,16 @@ python add_answers.py ../processed/r7.json r7ans.html -o ../processed/r7_full.js
 **実装済み**
 - パイプライン2本（`parse_gyosei.py` / `add_answers.py`）— 3型対応・欠番処理・各種検証
 - Web アプリ `web/`（Vite + React + PWA）— 3型出題 / 5択→○×一問一答 変換器 / 累積履歴
-  - 問題は `web/src/data/loadQuestions.js` が読む。実過去問は `web/public/data/questions.json`（gitignore）
-    に手動配置、無ければ自作サンプル（`web/src/data/sampleQuestions.js`）で動く。
-    ＊`web/src/` に過去問本文を書かない（public リポジトリ事故防止）。
+  - **公開構成の原則: フロント＝公開ホスト / 履歴＝Supabase / 問題＝各端末ローカル。**
+  - 問題は `web/src/data/loadQuestions.js` が読む。優先順位 ①IndexedDB 取り込み済み（画面の取り込みUI＝
+    `importQuestions()`／各端末ローカルに保存・サーバーに送らない）→ ②`web/public/data/questions.json`
+    （ローカル開発の手動配置・gitignore・公開ビルドに含めない）→ ③自作サンプル（`sampleQuestions.js`）。
+    ＊`web/src/` に過去問本文を書かない。公開デプロイのビルドにも実問題を含めない。
   - 履歴は **IndexedDB** に永続化（`web/src/lib/history.js`。localStorage は使わない）。
-  - **Supabase 同期**（`web/src/lib/supabase.js` + `web/supabase/schema.sql`）。
-    `bump_history` RPC で attempts/correct_count をサーバー側 +1 加算（複数端末で合算）。
-    送るのは question_id と集計値のみ。オフライン時は outbox に貯めて再送。
-  - **PWA化**（`vite-plugin-pwa`）。問題JSONは runtime キャッシュ（同梱しない）。
+  - **Supabase 同期**（`web/src/lib/supabase.js` + `web/supabase/migrations/0001_scrivener_history.sql`）。
+    schema=`scrivener` / RLS `auth.uid()=user_id`（anon全拒否）。同期は「取得→+1→upsert」、
+    送るのは question_id と集計値のみ。未サインイン/オフラインは outbox に貯めて再送。
+  - **PWA化**（`vite-plugin-pwa`）。問題JSONは同梱せず、各端末で取り込む。
 
 **TODO（おすすめ順）**
 1. フルPDFで `r7_full.json` を生成し精度確認（多肢の語群20個 / 記述の字数一致 / 欠番[1,58,59,60]）

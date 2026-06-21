@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from "react";
-import { loadQuestions } from "./data/loadQuestions.js";
+import { loadQuestions, importQuestions, clearImportedQuestions } from "./data/loadQuestions.js";
 import { loadLocalHistory, recordAnswer, syncFromServer } from "./lib/history.js";
 import { isSupabaseConfigured, getCurrentUser, signIn, signOut, onAuthChange } from "./lib/supabase.js";
 
@@ -88,7 +88,14 @@ export default function GyoseiQuiz() {
   const [submitted, setSubmitted] = useState(false);
   const [result, setResult] = useState(null);
 
-  // 問題データの読み込み
+  // 問題データの読み込み（端末ローカル優先）
+  async function reloadQuestions() {
+    const { questions, source } = await loadQuestions();
+    setQuestions(questions);
+    setSource(source);
+    setIdx(0);
+    resetTransient();
+  }
   useEffect(() => {
     loadQuestions().then(({ questions, source }) => {
       setQuestions(questions);
@@ -239,6 +246,8 @@ export default function GyoseiQuiz() {
 
         {isSupabaseConfigured && <AuthBar user={user} onSignOut={() => setUser(null)} />}
 
+        <QuestionsBar source={source} count={questions.length} onChange={reloadQuestions} />
+
         <header className="flex items-end justify-between mb-4">
           <div>
             <div style={{ fontSize: 12, letterSpacing: 2, color: C.inkSoft }}>行政書士試験 過去問</div>
@@ -320,6 +329,76 @@ export default function GyoseiQuiz() {
           <button className="opt" onClick={() => go(1)} disabled={idx === deck.length - 1} style={navBtn(idx === deck.length - 1)}>次へ →</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ═══════════ 問題データの取り込み（端末ローカル / サーバーに送らない） ═══════════ */
+function QuestionsBar({ source, count, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const inputRef = React.useRef(null);
+
+  const label =
+    source === "imported" ? `取り込み済み（${count}問・この端末）`
+    : source === "local-file" ? `ローカルファイル（${count}問）`
+    : `サンプル（${count}問）`;
+
+  async function onFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBusy(true); setMsg(null);
+    try {
+      const json = JSON.parse(await file.text());
+      const n = await importQuestions(json);
+      setMsg(`${n}問を取り込みました（この端末にのみ保存）`);
+      await onChange();
+    } catch (err) {
+      setMsg("読み込み失敗: " + (err?.message || "JSON形式を確認してください"));
+    } finally {
+      setBusy(false);
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  }
+
+  async function onClear() {
+    setBusy(true); setMsg(null);
+    await clearImportedQuestions();
+    setMsg("取り込みを削除しました（サンプルに戻ります）");
+    await onChange();
+    setBusy(false);
+  }
+
+  return (
+    <div className="mb-4" style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 6, padding: "8px 10px" }}>
+      <div className="flex items-center justify-between" style={{ gap: 8 }}>
+        <span style={{ fontSize: 11, color: C.inkSoft }}>
+          問題データ：<b style={{ color: C.ink }}>{label}</b>
+        </span>
+        <button className="opt" onClick={() => setOpen((v) => !v)}
+          style={{ background: "transparent", color: C.inkSoft, border: `1px solid ${C.line}`, borderRadius: 4, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontFamily: GOTHIC }}>
+          {open ? "閉じる" : "取り込み / 差し替え"}
+        </button>
+      </div>
+      {open && (
+        <div className="mt-2 pt-2" style={{ borderTop: `1px dashed ${C.line}`, fontSize: 11, color: C.inkSoft }}>
+          <div style={{ marginBottom: 6 }}>
+            自分の <code>questions.json</code> を選ぶと、<b>この端末（ブラウザ）にだけ</b>保存します。サーバーには送りません。
+          </div>
+          <div className="flex items-center flex-wrap" style={{ gap: 8 }}>
+            <input ref={inputRef} className="opt" type="file" accept="application/json,.json" disabled={busy}
+              onChange={onFile} style={{ fontSize: 11 }} />
+            {source === "imported" && (
+              <button className="opt" onClick={onClear} disabled={busy}
+                style={{ background: "transparent", color: C.shu, border: `1px solid ${C.shu}`, borderRadius: 4, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontFamily: GOTHIC }}>
+                取り込みを削除
+              </button>
+            )}
+          </div>
+          {msg && <div style={{ marginTop: 6, color: C.ink }}>{msg}</div>}
+        </div>
+      )}
     </div>
   );
 }

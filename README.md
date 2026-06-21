@@ -53,8 +53,11 @@ npm run build      # dist/ に PWA をビルド
 ```
 
 - 起動するとまず **自作サンプル問題** で動く（実過去問はリポジトリに含めない）。
-- 実過去問を使うには、パイプライン生成物を `web/public/data/questions.json` に**手動配置**する
-  （`.gitignore` 済み・配置すると自動で読み込まれる）。形式は [web/public/data/README.md](web/public/data/README.md)。
+- **実過去問は各端末ローカルに置く（サーバーには載せない）。** 2通り:
+  - **アプリ内で取り込み**（公開デプロイ／別端末向けの本筋）: 画面上部「問題データ → 取り込み / 差し替え」から
+    自分の `questions.json` を選ぶと、その端末の **IndexedDB にだけ**保存される（Supabase・公開ホストには送らない）。
+  - **ローカル開発で手動配置**: `web/public/data/questions.json` に置く（`.gitignore` 済み・公開ビルドには含めない）。
+  形式は [web/public/data/README.md](web/public/data/README.md)。読み込み優先順位は IndexedDB → ローカルファイル → サンプル。
 - 履歴は **IndexedDB** に永続化（リロードで消えない）。
 - **Supabase 同期（任意 / 個人用プロジェクト・非公開）**:
   1. `web/.env`（`.env.example` 参照）に **個人用プロジェクトの** URL・anon key を入れる（公開用プロジェクトのキーと混在させない）。
