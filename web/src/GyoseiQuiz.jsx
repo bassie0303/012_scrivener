@@ -47,9 +47,13 @@ function toOX(q) {
     isTrue: pol === "find_false" ? n !== q.answer : n === q.answer,
   }));
 }
-/* 分野・解答履歴で出題対象を絞り込む（弱点分野学習・未挑戦のみ 等） */
-function filterQuestions(questions, fields, studyFilter, history) {
+/* 年度・分野・解答履歴で出題対象を絞り込む（弱点分野学習・未挑戦のみ 等） */
+function filterQuestions(questions, { fields, years, studyFilter, history }) {
   let qs = questions;
+  if (years && years.length) {
+    const set = new Set(years);
+    qs = qs.filter((q) => set.has(q.year));
+  }
   if (fields && fields.length) {
     const set = new Set(fields);
     qs = qs.filter((q) => set.has(q.field));
@@ -68,7 +72,10 @@ function filterQuestions(questions, fields, studyFilter, history) {
 }
 
 function buildDeck(questions, mode, opts = {}) {
-  const qs = filterQuestions(questions, opts.fields, opts.studyFilter, opts.history || {});
+  const qs = filterQuestions(questions, {
+    fields: opts.fields, years: opts.years,
+    studyFilter: opts.studyFilter, history: opts.history || {},
+  });
   if (mode !== "ox") return qs.map((q) => ({ kind: q.type, ...q }));
   const deck = [];
   for (const q of qs) {
@@ -118,6 +125,7 @@ export default function GyoseiQuiz() {
   // 画面（出題 / 集計）と出題フィルタ
   const [view, setView] = useState("quiz");
   const [selectedFields, setSelectedFields] = useState([]); // [] = 全分野
+  const [selectedYears, setSelectedYears] = useState([]);   // [] = 全年度
   const [studyFilter, setStudyFilter] = useState("all");    // all/unseen/wrong/low
   const [deckNonce, setDeckNonce] = useState(0);            // 明示的な出題し直し
 
@@ -172,12 +180,20 @@ export default function GyoseiQuiz() {
     return FIELD_ORDER.filter((f) => present.has(f));
   }, [questions]);
 
+  // データに存在する年度（R2…R7 の昇順）
+  const allYears = useMemo(() => {
+    if (!questions) return [];
+    return [...new Set(questions.map((q) => q.year).filter(Boolean))]
+      .sort((a, b) => (parseInt(a.replace(/\D/g, "")) || 0) - (parseInt(b.replace(/\D/g, "")) || 0));
+  }, [questions]);
+
   const fieldsKey = selectedFields.slice().sort().join(",");
+  const yearsKey = selectedYears.slice().sort().join(",");
   // 解答では並びを固定したいので history はスナップショット(ref)で参照し、
   // フィルタ変更/出題し直し(deckNonce)時にだけ作り直す。
   const deck = useMemo(
-    () => (questions ? buildDeck(questions, mode, { fields: selectedFields, studyFilter, history: historyRef.current }) : []),
-    [questions, mode, fieldsKey, studyFilter, deckNonce] // eslint-disable-line react-hooks/exhaustive-deps
+    () => (questions ? buildDeck(questions, mode, { fields: selectedFields, years: selectedYears, studyFilter, history: historyRef.current }) : []),
+    [questions, mode, fieldsKey, yearsKey, studyFilter, deckNonce] // eslint-disable-line react-hooks/exhaustive-deps
   );
   const entry = deck[idx];
   const rec = entry ? history[entry.id] : null;
@@ -224,6 +240,7 @@ export default function GyoseiQuiz() {
 
   function rebuildDeck() { setIdx(0); resetTransient(); setDeckNonce((n) => n + 1); }
   function applyFields(next) { setSelectedFields(next); rebuildDeck(); }
+  function applyYears(next) { setSelectedYears(next); rebuildDeck(); }
   function applyStudyFilter(s) { setStudyFilter(s); rebuildDeck(); }
   // 集計画面から「この分野を弱点学習」: 分野を絞り+間違い/未挑戦中心に出題
   function studyField(field) {
@@ -345,6 +362,7 @@ export default function GyoseiQuiz() {
         <FilterBar
           mode={mode} onMode={switchMode}
           allFields={allFields} selectedFields={selectedFields} onFields={applyFields}
+          allYears={allYears} selectedYears={selectedYears} onYears={applyYears}
           studyFilter={studyFilter} onStudyFilter={applyStudyFilter}
           deckLen={deck.length} onRebuild={rebuildDeck}
         />
@@ -569,12 +587,18 @@ function chip(active) {
     border: `1px solid ${active ? C.ink : C.line}`, borderRadius: 999, padding: "3px 10px",
     fontSize: 11, cursor: "pointer", fontFamily: GOTHIC };
 }
-function FilterBar({ mode, onMode, allFields, selectedFields, onFields, studyFilter, onStudyFilter, deckLen, onRebuild }) {
+function FilterBar({ mode, onMode, allFields, selectedFields, onFields, allYears, selectedYears, onYears, studyFilter, onStudyFilter, deckLen, onRebuild }) {
   const sel = new Set(selectedFields);
   function toggle(f) {
     const next = new Set(sel);
     next.has(f) ? next.delete(f) : next.add(f);
     onFields([...next]);
+  }
+  const ysel = new Set(selectedYears);
+  function toggleYear(y) {
+    const next = new Set(ysel);
+    next.has(y) ? next.delete(y) : next.add(y);
+    onYears([...next]);
   }
   const studyOpts = [["all", "すべて"], ["unseen", "未挑戦"], ["wrong", "間違えた"], ["low", "正答率が低い"]];
   return (
@@ -596,7 +620,17 @@ function FilterBar({ mode, onMode, allFields, selectedFields, onFields, studyFil
         <span style={{ fontSize: 11, color: C.inkSoft, marginLeft: "auto" }}>{deckLen}問</span>
         <button className="opt" onClick={onRebuild} style={{ background: "transparent", color: C.inkSoft, border: `1px solid ${C.line}`, borderRadius: 4, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontFamily: GOTHIC }}>出題し直す</button>
       </div>
+      {allYears.length > 1 && (
+        <div className="flex items-center flex-wrap" style={{ gap: 6, marginBottom: 6 }}>
+          <span style={{ fontSize: 11, color: C.inkSoft, marginRight: 2 }}>年度</span>
+          <button className="opt" onClick={() => onYears([])} style={chip(selectedYears.length === 0)}>全年度</button>
+          {allYears.map((y) => (
+            <button key={y} className="opt" onClick={() => toggleYear(y)} style={chip(ysel.has(y))}>{y}</button>
+          ))}
+        </div>
+      )}
       <div className="flex items-center flex-wrap" style={{ gap: 6 }}>
+        <span style={{ fontSize: 11, color: C.inkSoft, marginRight: 2 }}>分野</span>
         <button className="opt" onClick={() => onFields([])} style={chip(selectedFields.length === 0)}>全分野</button>
         {allFields.map((f) => (
           <button key={f} className="opt" onClick={() => toggle(f)} style={chip(sel.has(f))}>{f}</button>
