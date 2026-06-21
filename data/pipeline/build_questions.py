@@ -41,6 +41,23 @@ def is_example(q):
     return False
 
 
+def clean_kijutsu_answer(q):
+    """記述式の正解例を整形。「正解例1/正解例2」等のラベルを除去し、
+    表示する正解例と length（字数）を自己整合させる。
+    ＊複数正解例が併記される問題があり、抽出が別の正解例を拾う場合があるが、
+      いずれも公式の正解例なので本文はそのまま採用し、length を実字数に合わせる。"""
+    if q.get("type") != "kijutsu":
+        return False
+    a = q.get("answer")
+    if not isinstance(a, dict) or "model" not in a:
+        return False
+    model = re.sub(r"正解例\s*\d+\s*", "", a["model"]).strip()
+    changed = (model != a["model"]) or (a.get("length") != len(model))
+    a["model"] = model
+    a["length"] = len(model)
+    return changed
+
+
 def fix_tashi_misclass(q):
     """tantou5 だが answer が {ア..} のものを tashi に補正し語群を再抽出。"""
     ans = q.get("answer")
@@ -82,6 +99,7 @@ def main():
             ok, n = fix_tashi_misclass(q)
             if ok:
                 fixed.append((q["id"], n))
+            clean_kijutsu_answer(q)
             if q.get("answer") is None:
                 dropped.append(q["id"])
                 continue
