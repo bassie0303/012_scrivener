@@ -107,13 +107,22 @@ function Stamp({ kind }) {
   );
 }
 
+// 出題フィルタ（モード/分野/年度/学習対象）を端末に保存・復元する
+const PREFS_KEY = "filterPrefs";
+function loadPrefs() {
+  try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || {}; } catch { return {}; }
+}
+function savePrefs(p) {
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch {}
+}
+
 export default function GyoseiQuiz() {
   const [questions, setQuestions] = useState(null);
   const [source, setSource] = useState(null);
   const [synced, setSynced] = useState(false);
   const [user, setUser] = useState(null); // Supabase Auth のサインイン中ユーザー
 
-  const [mode, setMode] = useState("tantou5");
+  const [mode, setMode] = useState(() => loadPrefs().mode || "tantou5");
   const [idx, setIdx] = useState(0);
   const [history, setHistory] = useState({});
   const [picked, setPicked] = useState(null);
@@ -132,12 +141,17 @@ export default function GyoseiQuiz() {
     try { localStorage.setItem("fontScale", String(v)); } catch {}
   }
 
-  // 画面（出題 / 集計）と出題フィルタ
+  // 画面（出題 / 集計）と出題フィルタ。フィルタは端末に保存され、次回も復元される。
   const [view, setView] = useState("quiz");
-  const [selectedFields, setSelectedFields] = useState([]); // [] = 全分野
-  const [selectedYears, setSelectedYears] = useState([]);   // [] = 全年度
-  const [studyFilter, setStudyFilter] = useState("all");    // all/unseen/wrong/low
+  const [selectedFields, setSelectedFields] = useState(() => loadPrefs().fields || []); // [] = 全分野
+  const [selectedYears, setSelectedYears] = useState(() => loadPrefs().years || []);     // [] = 全年度
+  const [studyFilter, setStudyFilter] = useState(() => loadPrefs().studyFilter || "all"); // all/unseen/wrong/low
   const [deckNonce, setDeckNonce] = useState(0);            // 明示的な出題し直し
+
+  // フィルタの変更を端末に保存（次回起動時に復元）
+  useEffect(() => {
+    savePrefs({ mode, fields: selectedFields, years: selectedYears, studyFilter });
+  }, [mode, selectedFields, selectedYears, studyFilter]);
 
   // デッキ構築は履歴のスナップショットで行う（解答のたびに並びが変わらないように）
   const historyRef = useRef(history);
