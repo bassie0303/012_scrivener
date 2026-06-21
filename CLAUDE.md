@@ -18,8 +18,12 @@
 - **同期するのは履歴だけ。** 同期ペイロードに問題本文・選択肢・正解例テキストを含めない。
   送るのは `question_id` と集計値（attempts / correct_count など）のみ。
 - **配布・公開しない。** アプリや問題データを他人に渡した瞬間に「私的使用」を外れる。常に1ユーザー（本人）想定。
-- **欠番（問題1・58〜60）を公式から無理に取得しない。** これらは第三者著作物が素材のためセンターも非掲載＝入手不可。
+- **欠番（非掲載問題）を公式から無理に取得しない。** これらは第三者著作物が素材のためセンターも非掲載＝入手不可。
+  典型は問題1・58〜60だが、**年度により追加で非掲載がある**（実績: R2-5 / R3-7 / R5-6 / R5-56）。
+  判定法: 正解HTMLには非掲載問題の正解も載るので、`add_answers.py` の「欠番正解(orphan)」に出れば非掲載＝正常。
   スキップするか、条文・判例ベースの**自作問題**（自分の著作物）で補完する。
+- **原本（公式PDF・正解HTML）と生成JSONはコミットしない。** `data/QA/`（原本）・`data/processed/*.json`・
+  `web/public/data/*.json` は `.gitignore` 済み。公開リポジトリ／公開ビルドに問題本文を入れない。
 - **秘密情報はハードコードしない。** Supabase等のキーは `.env` に置く（`.gitignore` 済みにする）。
 
 ---
@@ -41,36 +45,41 @@
 
 ## データパイプライン（`data/pipeline/`）
 
+原本（公式PDF・正解HTML）は `data/QA/r{2..7}_mondai.pdf` / `r{2..7}ans.html` に置く（gitignore）。
+venv: `python3 -m venv venv && ./venv/bin/pip install -r requirements.txt`（pdfplumber / beautifulsoup4）。
+崩れPDF対策の `pdftotext -layout` は poppler 導入済み（`/opt/homebrew`）。
+
+スクリプトは4本:
+- `parse_gyosei.py` … PDF抽出テキスト → 問題JSON（型別構造化・ニセ問題/ページ番号/見出し除去・欠番レポート）
+- `add_answers.py` … 正解HTML → answer 付与（型別・字数チェックサム・欠番正解は `_orphan_answers.json` へ退避）
+- `classify_field.py` … 分野分類（番号レンジ主軸＋設問文の明示キーワードで補正。9分野）
+- `build_questions.py` … 全年度を一括処理して結合・記述の正解例整形・分野付与・`raw`除去 → 1ファイル出力
+
 ```bash
-# 1) 問題PDF → テキスト抽出（pdfplumber 推奨。多肢の語群が崩れる年度は pdftotext -layout を試す）
-curl -L -o r7_mondai.pdf https://gyosei-shiken.or.jp/pdf/r7_mondai.pdf
-python -c "import pdfplumber;print('\n'.join(p.extract_text() or '' for p in pdfplumber.open('r7_mondai.pdf').pages))" > r7.txt
-
-# 2) テキスト → 問題JSON（型別に構造化、欠番レポート）
-python parse_gyosei.py r7.txt --year R7 -o ../processed/r7.json
-
-# 3) 正解HTML → answer 付与（型別、字数チェックサム、欠番正解は別ファイルに退避）
-curl -L -o r7ans.html https://gyosei-shiken.or.jp/doc/exam/r7ans.html
-python add_answers.py ../processed/r7.json r7ans.html -o ../processed/r7_full.json
+cd data/pipeline
+# 全年度(R2〜R7)を一括生成 → 端末取り込み用 questions.json（と開発用コピー）
+./venv/bin/python build_questions.py -o ../processed/questions.json -o ../../web/public/data/questions.json
 ```
 
-成果物 = `data/processed/r7_full.json`（問題59問＋正解）。他年度は `--year R6` 等で同じ処理。
+成果物 = `data/processed/questions.json`（`{ "R2":[…], …, "R7":[…] }` 形式・**331問**）。
 
 **生成後の検証ポイント:**
-- `[欠番]` が `[1, 58, 59, 60]` のみ → パース成功（他番号が混じれば分割失敗）
+- 欠番が `[1, 58, 59, 60]` ＋ その年度の追加非掲載のみか（それ以外が混じれば分割失敗）。
+  追加非掲載は `add_answers.py` の orphan に出ているか（出ていれば正常）で判定する。
 - `tashi` 各問の `word_bank` が20個ある
-- `[型整合] OK` / 記述式の字数チェックサム一致
+- `[型整合] OK` / 記述式の `len(model) == length`（字数チェックサム一致）
+- R6-34 は公式「全員正解」（没問・単一正解なし）のため自動で除外される（正常）
 
 ---
 
 ## データスキーマ
 
-問題（`*_full.json` の各要素）:
+問題（`questions.json` の各要素）:
 ```jsonc
 {
   "id": "r7-2", "year": "R7", "number": 2,
   "type": "tantou5" | "tashi" | "kijutsu",
-  "field": "基礎法学",            // 分野（任意。UI表示用）
+  "field": "憲法",               // 分野（classify_field.py が必ず付与。下記9分野）
   "stem": "…設問文…",
   "choices": { "1": "…", "5": "…" },          // tantou5
   "word_bank": { "1": "…", "20": "…" },        // tashi
@@ -78,9 +87,12 @@ python add_answers.py ../processed/r7.json r7ans.html -o ../processed/r7_full.js
   "answer": "4"                                // tantou5
          |  { "ア": "5", "イ": "10", "ウ": "19", "エ": "13" }   // tashi
          |  { "model": "…正解例…", "length": 36 },              // kijutsu
-  "note": null, "raw": "…原文…"
+  "note": null
 }
 ```
+分野（`field`）: 基礎法学 / 憲法 / 行政法 / 民法 / 商法・会社法 / 政治・経済・社会 /
+情報通信・個人情報保護 / 行政書士法等 / 文章理解。
+＊`raw`（原文）は `build_questions.py` が端末配布版で除去する（容量・本文露出を減らす）。
 
 履歴（Supabase `history` テーブル。**問題本文は含めない**）:
 ```jsonc
@@ -99,8 +111,11 @@ python add_answers.py ../processed/r7.json r7ans.html -o ../processed/r7_full.js
 
 ## 技術スタック（暫定）
 
-- フロント: React。雛形は `web/GyoseiQuiz.jsx`。**PWA**（オフライン・ホーム追加・ストア審査不要で複数端末）か Next.js。
-  問題JSONはバンドル。`GyoseiQuiz.jsx` の `QUESTIONS` 定数を `r7_full.json` の import に差し替える。
+- フロント: `web/`（Vite + React + **PWA**）。本体は `web/src/GyoseiQuiz.jsx`。
+  - **公開デプロイ = GitHub Pages**（プロジェクトページ＝サブパス `/012_scrivener/`）。`vite.config.js` が
+    本番ビルド時だけ `base="/012_scrivener/"` にする（dev はルート）。URL: https://bassie0303.github.io/012_scrivener/
+  - 問題は各端末で取り込む（バンドルしない）。出題は 年度 × 分野 × 学習対象（未挑戦/間違えた/正答率低/すべて）で絞れる。
+  - 本文の文字サイズ調整あり（CSS変数 `--rs`、小/中/大/特大、localStorage 保存）。集計（分野別の習得状況）画面あり。
 - 履歴同期: Supabase（無料枠で1ユーザーぶんは充分）。`history` は上記の集計型で upsert（attempts/correct_count を +1 加算）。
   - **個人用プロジェクト（非公開）** を使う。公開用プロジェクトのキーと混在させない。
   - **schema = `scrivener`**（public に置かない）。supabase-js は `createClient(..., { db: { schema: "scrivener" } })` で初期化。
@@ -116,7 +131,9 @@ python add_answers.py ../processed/r7.json r7ans.html -o ../processed/r7_full.js
 ## 実装済み / TODO
 
 **実装済み**
-- パイプライン2本（`parse_gyosei.py` / `add_answers.py`）— 3型対応・欠番処理・各種検証
+- パイプライン4本（`parse_gyosei.py` / `add_answers.py` / `classify_field.py` / `build_questions.py`）
+  — 3型対応・欠番処理・分野分類・各種検証。**全年度R2〜R7をJSON化済み（331問）**。
+- 分野分類（9分野）・出題の年度/分野/学習対象フィルタ・集計画面・文字サイズ調整
 - Web アプリ `web/`（Vite + React + PWA）— 3型出題 / 5択→○×一問一答 変換器 / 累積履歴
   - **公開構成の原則: フロント＝公開ホスト / 履歴＝Supabase / 問題＝各端末ローカル。**
   - 問題は `web/src/data/loadQuestions.js` が読む。優先順位 ①IndexedDB 取り込み済み（画面の取り込みUI＝
@@ -130,10 +147,10 @@ python add_answers.py ../processed/r7.json r7ans.html -o ../processed/r7_full.js
   - **PWA化**（`vite-plugin-pwa`）。問題JSONは同梱せず、各端末で取り込む。
 
 **TODO（おすすめ順）**
-1. フルPDFで `r7_full.json` を生成し精度確認（多肢の語群20個 / 記述の字数一致 / 欠番[1,58,59,60]）
-2. 全年度 R2〜R7 を生成し `web/public/data/questions.json` にまとめて配置
-3. 出題順ロジック（ランダム / 分野別 / 正答率の低い順 / 間違えた問題の再出題）
-4. ○×変換の取りこぼしログ（極性判定できない5択を検出して一覧化）
+1. 出題順の追加（ランダム出題 / 行間調整など）。※分野・年度・学習対象の絞り込みは実装済み
+2. 分野分類の精度向上（`classify_field.py`。例: 「裁判制度／簡易裁判所」で "代理" 等の語に誤発火する稀ケース）
+3. ○×変換の取りこぼしログ（極性判定できない5択を検出して一覧化）
+4. R6-34（全員正解の没問）を「常に正解＋注記」で参考収録するか検討（既定は除外）
 
 ---
 
@@ -143,4 +160,5 @@ python add_answers.py ../processed/r7.json r7ans.html -o ../processed/r7_full.js
 - 問題データを **配布・公開** する
 - 欠番を公式から無理に取得しようとする
 - キーをハードコードする
-- 実機PWAで `localStorage` 前提のデータ設計にする（永続化は IndexedDB 等を使う）
+- **データ**（問題・履歴）の永続化を `localStorage` 前提で設計する（→ IndexedDB を使う）。
+  ＊文字サイズ等の軽量なUI設定だけは `localStorage` 可（データではないため）。
