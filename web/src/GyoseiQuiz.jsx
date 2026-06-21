@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import { loadQuestions, importQuestions, clearImportedQuestions } from "./data/loadQuestions.js";
 import { loadLocalHistory, recordAnswer, syncFromServer } from "./lib/history.js";
 import { isSupabaseConfigured, getCurrentUser, signIn, signOut, onAuthChange } from "./lib/supabase.js";
@@ -47,10 +47,31 @@ function toOX(q) {
     isTrue: pol === "find_false" ? n !== q.answer : n === q.answer,
   }));
 }
-function buildDeck(questions, mode) {
-  if (mode !== "ox") return questions.map((q) => ({ kind: q.type, ...q }));
+/* 分野・解答履歴で出題対象を絞り込む（弱点分野学習・未挑戦のみ 等） */
+function filterQuestions(questions, fields, studyFilter, history) {
+  let qs = questions;
+  if (fields && fields.length) {
+    const set = new Set(fields);
+    qs = qs.filter((q) => set.has(q.field));
+  }
+  if (studyFilter && studyFilter !== "all") {
+    qs = qs.filter((q) => {
+      const h = history[q.id];
+      const acc = h && h.attempts ? h.correct_count / h.attempts : null;
+      if (studyFilter === "unseen") return !h || !h.attempts;          // 未挑戦
+      if (studyFilter === "wrong") return !!h && h.last_result === false; // 直近で間違えた
+      if (studyFilter === "low") return acc !== null && acc < 0.5;       // 正答率が低い
+      return true;
+    });
+  }
+  return qs;
+}
+
+function buildDeck(questions, mode, opts = {}) {
+  const qs = filterQuestions(questions, opts.fields, opts.studyFilter, opts.history || {});
+  if (mode !== "ox") return qs.map((q) => ({ kind: q.type, ...q }));
   const deck = [];
-  for (const q of questions) {
+  for (const q of qs) {
     if (q.type === "tantou5") {
       const ox = toOX(q);
       if (ox) { deck.push(...ox); continue; }
@@ -59,6 +80,12 @@ function buildDeck(questions, mode) {
   }
   return deck;
 }
+
+// 分野の表示順（network 化したときの一覧用）
+const FIELD_ORDER = [
+  "基礎法学", "憲法", "行政法", "民法", "商法・会社法",
+  "政治・経済・社会", "情報通信・個人情報保護", "行政書士法等", "文章理解", "その他",
+];
 
 /* ═══════════ 採点スタンプ ═══════════ */
 function Stamp({ kind }) {
@@ -87,6 +114,16 @@ export default function GyoseiQuiz() {
   const [revealed, setRevealed] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [result, setResult] = useState(null);
+
+  // 画面（出題 / 集計）と出題フィルタ
+  const [view, setView] = useState("quiz");
+  const [selectedFields, setSelectedFields] = useState([]); // [] = 全分野
+  const [studyFilter, setStudyFilter] = useState("all");    // all/unseen/wrong/low
+  const [deckNonce, setDeckNonce] = useState(0);            // 明示的な出題し直し
+
+  // デッキ構築は履歴のスナップショットで行う（解答のたびに並びが変わらないように）
+  const historyRef = useRef(history);
+  useEffect(() => { historyRef.current = history; }, [history]);
 
   // 問題データの読み込み（端末ローカル優先）
   async function reloadQuestions() {
@@ -128,9 +165,19 @@ export default function GyoseiQuiz() {
     return () => { alive = false; };
   }, [user]);
 
+  // データに存在する分野（表示順）
+  const allFields = useMemo(() => {
+    if (!questions) return [];
+    const present = new Set(questions.map((q) => q.field).filter(Boolean));
+    return FIELD_ORDER.filter((f) => present.has(f));
+  }, [questions]);
+
+  const fieldsKey = selectedFields.slice().sort().join(",");
+  // 解答では並びを固定したいので history はスナップショット(ref)で参照し、
+  // フィルタ変更/出題し直し(deckNonce)時にだけ作り直す。
   const deck = useMemo(
-    () => (questions ? buildDeck(questions, mode) : []),
-    [questions, mode]
+    () => (questions ? buildDeck(questions, mode, { fields: selectedFields, studyFilter, history: historyRef.current }) : []),
+    [questions, mode, fieldsKey, studyFilter, deckNonce] // eslint-disable-line react-hooks/exhaustive-deps
   );
   const entry = deck[idx];
   const rec = entry ? history[entry.id] : null;
@@ -143,6 +190,46 @@ export default function GyoseiQuiz() {
       correct: vals.reduce((a, v) => a + v.correct_count, 0),
     };
   }, [history]);
+
+  // 分野ごとの習得状況（網羅率・正答率）。履歴は問題ID(5択/多肢/記述)で集計。
+  const fieldStats = useMemo(() => {
+    if (!questions) return [];
+    const map = {};
+    for (const q of questions) {
+      const f = q.field || "その他";
+      const s = (map[f] = map[f] || { field: f, total: 0, attempted: 0, attemptSum: 0, correctSum: 0 });
+      s.total++;
+      const h = history[q.id];
+      if (h && h.attempts) { s.attempted++; s.attemptSum += h.attempts; s.correctSum += h.correct_count; }
+    }
+    return allFields.map((f) => map[f]).filter(Boolean).map((s) => ({
+      ...s,
+      coverage: s.total ? s.attempted / s.total : 0,
+      accuracy: s.attemptSum ? s.correctSum / s.attemptSum : null,
+    }));
+  }, [questions, history, allFields]);
+
+  // 解答履歴ステータス別の集計（未挑戦 / 要復習 / 習得）
+  const statusCounts = useMemo(() => {
+    let unseen = 0, review = 0, mastered = 0;
+    for (const q of questions || []) {
+      const h = history[q.id];
+      if (!h || !h.attempts) unseen++;
+      else if (h.last_result === false || h.correct_count / h.attempts < 0.5) review++;
+      else mastered++;
+    }
+    const total = (questions || []).length;
+    return { unseen, review, mastered, total };
+  }, [questions, history]);
+
+  function rebuildDeck() { setIdx(0); resetTransient(); setDeckNonce((n) => n + 1); }
+  function applyFields(next) { setSelectedFields(next); rebuildDeck(); }
+  function applyStudyFilter(s) { setStudyFilter(s); rebuildDeck(); }
+  // 集計画面から「この分野を弱点学習」: 分野を絞り+間違い/未挑戦中心に出題
+  function studyField(field) {
+    setSelectedFields([field]); setStudyFilter("wrong"); setView("quiz");
+    setMode("tantou5"); setIdx(0); resetTransient(); setDeckNonce((n) => n + 1);
+  }
 
   function recordHistory(id, correct, chosen) {
     // 楽観的に即時反映
@@ -207,9 +294,9 @@ export default function GyoseiQuiz() {
     );
   }
 
-  const canSubmit =
+  const canSubmit = entry && (
     (entry.type === "tantou5" && picked) ||
-    (entry.type === "tashi" && ["ア", "イ", "ウ", "エ"].every((k) => blanks[k]));
+    (entry.type === "tashi" && ["ア", "イ", "ウ", "エ"].every((k) => blanks[k])));
 
   const syncLabel = !isSupabaseConfigured
     ? "ローカル保存"
@@ -229,11 +316,12 @@ export default function GyoseiQuiz() {
 
       <div className="mx-auto" style={{ maxWidth: 760, padding: "20px 16px 56px" }}>
         <div className="flex items-center justify-between mb-4" style={{ gap: 8 }}>
+          {/* 出題 / 集計 タブ */}
           <div className="flex gap-1" style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 6, padding: 3, width: "fit-content" }}>
-            {[["tantou5", "5肢択一"], ["ox", "○×一問一答"]].map(([m, lbl]) => (
-              <button key={m} className="opt" onClick={() => switchMode(m)} style={{
-                background: mode === m ? C.ink : "transparent", color: mode === m ? "#fff" : C.inkSoft,
-                border: "none", borderRadius: 4, padding: "6px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: GOTHIC }}>{lbl}</button>
+            {[["quiz", "出題"], ["dash", "集計"]].map(([v, lbl]) => (
+              <button key={v} className="opt" onClick={() => setView(v)} style={{
+                background: view === v ? C.ink : "transparent", color: view === v ? "#fff" : C.inkSoft,
+                border: "none", borderRadius: 4, padding: "6px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: GOTHIC }}>{lbl}</button>
             ))}
           </div>
           <div className="flex items-center" style={{ gap: 8, fontSize: 11, color: C.inkSoft }}>
@@ -247,6 +335,27 @@ export default function GyoseiQuiz() {
         {isSupabaseConfigured && <AuthBar user={user} onSignOut={() => setUser(null)} />}
 
         <QuestionsBar source={source} count={questions.length} onChange={reloadQuestions} />
+
+        {view === "dash" ? (
+          <Dashboard fieldStats={fieldStats} statusCounts={statusCounts}
+            selectedFields={selectedFields} onStudyField={studyField} onPickField={applyFields} />
+        ) : (
+        <>
+        {/* 出題条件 */}
+        <FilterBar
+          mode={mode} onMode={switchMode}
+          allFields={allFields} selectedFields={selectedFields} onFields={applyFields}
+          studyFilter={studyFilter} onStudyFilter={applyStudyFilter}
+          deckLen={deck.length} onRebuild={rebuildDeck}
+        />
+
+        {!entry ? (
+          <div style={{ background: C.paper, border: `1px solid ${C.line}`, borderRadius: 4, padding: "40px 22px", textAlign: "center", color: C.inkSoft }}>
+            <div style={{ fontFamily: MINCHO, fontSize: 16, marginBottom: 8 }}>該当する問題がありません</div>
+            <div style={{ fontSize: 12 }}>分野や「学習対象」の条件をゆるめてください（例: 学習対象を「すべて」に）。</div>
+          </div>
+        ) : (
+        <>
 
         <header className="flex items-end justify-between mb-4">
           <div>
@@ -328,6 +437,10 @@ export default function GyoseiQuiz() {
           </div>
           <button className="opt" onClick={() => go(1)} disabled={idx === deck.length - 1} style={navBtn(idx === deck.length - 1)}>次へ →</button>
         </div>
+        </>
+        )}
+        </>
+        )}
       </div>
     </div>
   );
@@ -447,6 +560,105 @@ function AuthBar({ user, onSignOut }) {
       </button>
       {err && <span style={{ fontSize: 11, color: C.shu, flexBasis: "100%" }}>{err}</span>}
     </form>
+  );
+}
+
+/* ═══════════ 出題条件バー（分野・学習対象・モード） ═══════════ */
+function chip(active) {
+  return { background: active ? C.ink : "#fff", color: active ? "#fff" : C.inkSoft,
+    border: `1px solid ${active ? C.ink : C.line}`, borderRadius: 999, padding: "3px 10px",
+    fontSize: 11, cursor: "pointer", fontFamily: GOTHIC };
+}
+function FilterBar({ mode, onMode, allFields, selectedFields, onFields, studyFilter, onStudyFilter, deckLen, onRebuild }) {
+  const sel = new Set(selectedFields);
+  function toggle(f) {
+    const next = new Set(sel);
+    next.has(f) ? next.delete(f) : next.add(f);
+    onFields([...next]);
+  }
+  const studyOpts = [["all", "すべて"], ["unseen", "未挑戦"], ["wrong", "間違えた"], ["low", "正答率が低い"]];
+  return (
+    <div className="mb-4" style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px 12px" }}>
+      <div className="flex items-center flex-wrap" style={{ gap: 8, marginBottom: 8 }}>
+        <div className="flex gap-1" style={{ background: C.bg, borderRadius: 6, padding: 3 }}>
+          {[["tantou5", "5肢択一"], ["ox", "○×一問一答"]].map(([m, l]) => (
+            <button key={m} className="opt" onClick={() => onMode(m)} style={{
+              background: mode === m ? C.ink : "transparent", color: mode === m ? "#fff" : C.inkSoft,
+              border: "none", borderRadius: 4, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: GOTHIC }}>{l}</button>
+          ))}
+        </div>
+        <label style={{ fontSize: 11, color: C.inkSoft }}>学習対象：
+          <select className="opt" value={studyFilter} onChange={(e) => onStudyFilter(e.target.value)}
+            style={{ marginLeft: 4, border: `1px solid ${C.line}`, borderRadius: 4, padding: "4px 6px", fontSize: 12, fontFamily: GOTHIC, color: C.ink }}>
+            {studyOpts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        </label>
+        <span style={{ fontSize: 11, color: C.inkSoft, marginLeft: "auto" }}>{deckLen}問</span>
+        <button className="opt" onClick={onRebuild} style={{ background: "transparent", color: C.inkSoft, border: `1px solid ${C.line}`, borderRadius: 4, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontFamily: GOTHIC }}>出題し直す</button>
+      </div>
+      <div className="flex items-center flex-wrap" style={{ gap: 6 }}>
+        <button className="opt" onClick={() => onFields([])} style={chip(selectedFields.length === 0)}>全分野</button>
+        {allFields.map((f) => (
+          <button key={f} className="opt" onClick={() => toggle(f)} style={chip(sel.has(f))}>{f}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════ 集計ダッシュボード（網羅率・分野別の習得状況） ═══════════ */
+function miniBtn(primary) {
+  return { background: primary ? C.shu : "transparent", color: primary ? "#fff" : C.inkSoft,
+    border: `1px solid ${primary ? C.shu : C.line}`, borderRadius: 4, padding: "4px 10px",
+    fontSize: 11, cursor: "pointer", fontFamily: GOTHIC };
+}
+function Dashboard({ fieldStats, statusCounts, onStudyField, onPickField }) {
+  const pct = (n) => Math.round(n * 100);
+  const done = statusCounts.total - statusCounts.unseen;
+  const overallCov = statusCounts.total ? done / statusCounts.total : 0;
+  return (
+    <div>
+      <div className="grid grid-cols-3 gap-2 mb-4">
+        {[["未挑戦", statusCounts.unseen, C.inkSoft], ["要復習", statusCounts.review, C.shu], ["習得", statusCounts.mastered, C.ink]].map(([l, v, col]) => (
+          <div key={l} style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 6, padding: "12px", textAlign: "center" }}>
+            <div style={{ fontSize: 11, color: C.inkSoft }}>{l}</div>
+            <div style={{ fontFamily: MINCHO, fontSize: 24, fontWeight: 700, color: col }}>{v}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ fontSize: 12, color: C.inkSoft, marginBottom: 4 }}>網羅率 {pct(overallCov)}%（{done}/{statusCounts.total}問に挑戦）</div>
+      <div style={{ height: 6, background: C.line, borderRadius: 3, marginBottom: 18 }}>
+        <div style={{ height: "100%", width: `${pct(overallCov)}%`, background: C.ink, borderRadius: 3, transition: "width .3s" }} />
+      </div>
+
+      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>分野ごとの習得状況</div>
+      <div className="flex flex-col" style={{ gap: 8 }}>
+        {fieldStats.map((s) => {
+          const acc = s.accuracy == null ? null : pct(s.accuracy);
+          const cov = pct(s.coverage);
+          const weak = s.accuracy != null && s.accuracy < 0.6;
+          return (
+            <div key={s.field} style={{ background: "#fff", border: `1px solid ${weak ? C.shu : C.line}`, borderRadius: 6, padding: "10px 12px" }}>
+              <div className="flex items-center justify-between" style={{ marginBottom: 6 }}>
+                <span style={{ fontFamily: MINCHO, fontSize: 14, fontWeight: 700 }}>
+                  {s.field}{weak && <span style={{ fontSize: 10, color: C.shu, marginLeft: 6 }}>弱点</span>}
+                </span>
+                <span style={{ fontSize: 11, color: C.inkSoft }}>
+                  {s.attempted}/{s.total}問 ・ 正答率 {acc == null ? "—" : acc + "%"}
+                </span>
+              </div>
+              <div style={{ height: 5, background: C.bg, borderRadius: 3, marginBottom: 8 }}>
+                <div style={{ height: "100%", width: `${cov}%`, background: acc == null ? C.inkSoft : weak ? C.shu : C.ink, borderRadius: 3 }} />
+              </div>
+              <div className="flex" style={{ gap: 8 }}>
+                <button className="opt" onClick={() => onPickField([s.field])} style={miniBtn(false)}>この分野を出題</button>
+                <button className="opt" onClick={() => onStudyField(s.field)} style={miniBtn(true)}>弱点だけ復習</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
