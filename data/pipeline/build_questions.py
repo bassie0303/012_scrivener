@@ -16,6 +16,7 @@ import argparse
 
 sys.path.insert(0, ".")
 from parse_gyosei import extract_word_bank  # 語群再抽出を流用
+from classify_field import classify_field  # 分野分類
 
 YEARS = ["R2", "R3", "R4", "R5", "R6", "R7"]
 TOTAL = 60
@@ -103,6 +104,7 @@ def main():
             if q.get("answer") is None:
                 dropped.append(q["id"])
                 continue
+            q["field"] = classify_field(q)  # 分野を付与
             q.pop("raw", None)  # raw は端末に不要（容量・余計な本文露出を減らす）
             num = q["number"]
             # 同番号が複数残ったら本文が長い方を実問題として採用
