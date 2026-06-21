@@ -59,13 +59,36 @@ export async function clearImportedQuestions() {
 }
 
 function normalize(json) {
-  if (Array.isArray(json)) return json;
-  if (json && Array.isArray(json.questions)) return json.questions;
-  if (json && typeof json === "object") {
+  let list = [];
+  if (Array.isArray(json)) list = json;
+  else if (json && Array.isArray(json.questions)) list = json.questions;
+  else if (json && typeof json === "object") {
     // { "R7": [...], "R6": [...] } を平坦化
-    return Object.values(json)
-      .filter(Array.isArray)
-      .flat();
+    list = Object.values(json).filter(Array.isArray).flat();
   }
-  return [];
+  return list.map(sanitize);
+}
+
+// 印刷用の版面情報ノイズ（InDesignのトンボ。R7のPDFで選択肢末尾に混入）を除去。
+//   例: "…。8029_01_SHIKEN01_M.indd 2 2025/09/27 1:40"
+// ".indd" は正規の問題文に出ないので、そのトークン以降を末尾ごと削る。
+// ＊取り込み済みの古いデータも読込時にここで除去される＝再取り込み不要。
+const PRINT_MARK = /\s*\d[\w]*\.indd\b[\s\S]*/;
+function scrub(s) {
+  return typeof s === "string" ? s.replace(PRINT_MARK, "").trimEnd() : s;
+}
+function scrubMap(obj) {
+  if (!obj || typeof obj !== "object") return obj;
+  const out = {};
+  for (const k of Object.keys(obj)) out[k] = scrub(obj[k]);
+  return out;
+}
+function sanitize(q) {
+  if (!q || typeof q !== "object") return q;
+  const next = { ...q };
+  if (typeof next.stem === "string") next.stem = scrub(next.stem);
+  if (next.choices) next.choices = scrubMap(next.choices);
+  if (next.word_bank) next.word_bank = scrubMap(next.word_bank);
+  if (typeof next.reference === "string") next.reference = scrub(next.reference);
+  return next;
 }

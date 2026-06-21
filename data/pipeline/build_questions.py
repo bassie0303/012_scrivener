@@ -42,6 +42,28 @@ def is_example(q):
     return False
 
 
+# 印刷用の版面情報（InDesignのファイル名トンボ）。R7のPDFでページ末尾＝最後の選択肢に混入。
+#   例: "…。8029_01_SHIKEN01_M.indd 2 2025/09/27 1:40"
+# ".indd" は正規の問題文には現れないので、そのトークン以降を末尾ごと除去する。
+PRINT_MARK = re.compile(r"\s*\d[\w]*\.indd\b[\s\S]*")
+
+
+def _scrub(s):
+    return PRINT_MARK.sub("", s).rstrip() if isinstance(s, str) else s
+
+
+def scrub_print_marks(q):
+    """設問文・選択肢・語群・参照条文から版面情報ノイズを除去。"""
+    if "stem" in q:
+        q["stem"] = _scrub(q["stem"])
+    if isinstance(q.get("choices"), dict):
+        q["choices"] = {k: _scrub(v) for k, v in q["choices"].items()}
+    if isinstance(q.get("word_bank"), dict):
+        q["word_bank"] = {k: _scrub(v) for k, v in q["word_bank"].items()}
+    if q.get("reference"):
+        q["reference"] = _scrub(q["reference"])
+
+
 def clean_kijutsu_answer(q):
     """記述式の正解例を整形。「正解例1/正解例2」等のラベルを除去し、
     表示する正解例と length（字数）を自己整合させる。
@@ -104,6 +126,7 @@ def main():
             if q.get("answer") is None:
                 dropped.append(q["id"])
                 continue
+            scrub_print_marks(q)            # 版面情報ノイズ(.indd トンボ)を除去
             q["field"] = classify_field(q)  # 分野を付与
             q.pop("raw", None)  # raw は端末に不要（容量・余計な本文露出を減らす）
             num = q["number"]
