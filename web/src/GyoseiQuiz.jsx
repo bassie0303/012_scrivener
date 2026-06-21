@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { loadQuestions } from "./data/loadQuestions.js";
 import { loadLocalHistory, recordAnswer, syncFromServer } from "./lib/history.js";
-import { isSupabaseConfigured } from "./lib/supabase.js";
+import { isSupabaseConfigured, getCurrentUser, signIn, signOut, onAuthChange } from "./lib/supabase.js";
 
 /**
  * 行政書士試験 問題集アプリ — UI（PWA / 永続化対応）
@@ -77,6 +77,7 @@ export default function GyoseiQuiz() {
   const [questions, setQuestions] = useState(null);
   const [source, setSource] = useState(null);
   const [synced, setSynced] = useState(false);
+  const [user, setUser] = useState(null); // Supabase Auth のサインイン中ユーザー
 
   const [mode, setMode] = useState("tantou5");
   const [idx, setIdx] = useState(0);
@@ -95,15 +96,30 @@ export default function GyoseiQuiz() {
     });
   }, []);
 
-  // 履歴: まずローカル(IndexedDB)を即時反映 → 設定があればサーバー集約で上書き
+  // 履歴: まずローカル(IndexedDB)を即時反映。サインイン済みならサーバー値で上書き。
   useEffect(() => {
     let alive = true;
     loadLocalHistory().then((h) => { if (alive) setHistory(h); });
+
+    // 認証状態を取得し、変化（サインイン/アウト）に追随
+    getCurrentUser().then((u) => { if (alive) setUser(u); });
+    const unsub = onAuthChange((u) => {
+      if (!alive) return;
+      setUser(u);
+      if (!u) setSynced(false);
+    });
+    return () => { alive = false; unsub(); };
+  }, []);
+
+  // サインインしたら（または起動時に既存セッションがあれば）サーバー値で揃える
+  useEffect(() => {
+    if (!user) return;
+    let alive = true;
     syncFromServer().then((h) => {
       if (alive && h) { setHistory(h); setSynced(true); }
     });
     return () => { alive = false; };
-  }, []);
+  }, [user]);
 
   const deck = useMemo(
     () => (questions ? buildDeck(questions, mode) : []),
@@ -190,7 +206,9 @@ export default function GyoseiQuiz() {
 
   const syncLabel = !isSupabaseConfigured
     ? "ローカル保存"
-    : synced ? "同期済み" : "ローカル保存（同期待ち）";
+    : !user
+      ? "未サインイン（ローカル保存）"
+      : synced ? "同期済み" : "サインイン済み（同期中…）";
 
   return (
     <div style={{ background: C.bg, minHeight: "100%", fontFamily: GOTHIC, color: C.ink }}>
@@ -218,6 +236,8 @@ export default function GyoseiQuiz() {
             <span>{syncLabel}</span>
           </div>
         </div>
+
+        {isSupabaseConfigured && <AuthBar user={user} onSignOut={() => setUser(null)} />}
 
         <header className="flex items-end justify-between mb-4">
           <div>
@@ -301,6 +321,53 @@ export default function GyoseiQuiz() {
         </div>
       </div>
     </div>
+  );
+}
+
+/* ═══════════ サインイン（Supabase Auth / 本人のみ） ═══════════ */
+function AuthBar({ user, onSignOut }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  if (user) {
+    return (
+      <div className="flex items-center justify-end mb-4" style={{ gap: 10, fontSize: 11, color: C.inkSoft }}>
+        <span>{user.email}</span>
+        <button className="opt" onClick={async () => { await signOut(); onSignOut(); }}
+          style={{ background: "transparent", color: C.inkSoft, border: `1px solid ${C.line}`, borderRadius: 4, padding: "4px 10px", cursor: "pointer", fontFamily: GOTHIC }}>
+          サインアウト
+        </button>
+      </div>
+    );
+  }
+
+  async function submit(e) {
+    e.preventDefault();
+    setBusy(true); setErr(null);
+    const { error } = await signIn(email.trim(), password);
+    setBusy(false);
+    if (error) setErr(error.message || "サインインに失敗しました");
+    // 成功時は onAuthChange 経由で user が更新される
+  }
+
+  return (
+    <form onSubmit={submit} className="flex flex-wrap items-center mb-4"
+      style={{ gap: 8, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 6, padding: "8px 10px" }}>
+      <span style={{ fontSize: 11, color: C.inkSoft }}>履歴を同期するにはサインイン：</span>
+      <input className="opt" type="email" required placeholder="メールアドレス" value={email}
+        autoComplete="username" onChange={(e) => setEmail(e.target.value)}
+        style={{ flex: "1 1 160px", minWidth: 0, border: `1px solid ${C.line}`, borderRadius: 4, padding: "6px 8px", fontSize: 12, fontFamily: GOTHIC }} />
+      <input className="opt" type="password" required placeholder="パスワード" value={password}
+        autoComplete="current-password" onChange={(e) => setPassword(e.target.value)}
+        style={{ flex: "1 1 140px", minWidth: 0, border: `1px solid ${C.line}`, borderRadius: 4, padding: "6px 8px", fontSize: 12, fontFamily: GOTHIC }} />
+      <button className="opt" type="submit" disabled={busy}
+        style={{ background: busy ? "#c2c6d0" : C.ink, color: "#fff", border: "none", borderRadius: 4, padding: "6px 14px", fontSize: 12, fontWeight: 700, cursor: busy ? "default" : "pointer", fontFamily: GOTHIC }}>
+        {busy ? "…" : "サインイン"}
+      </button>
+      {err && <span style={{ fontSize: 11, color: C.shu, flexBasis: "100%" }}>{err}</span>}
+    </form>
   );
 }
 

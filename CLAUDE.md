@@ -102,6 +102,12 @@ python add_answers.py ../processed/r7.json r7ans.html -o ../processed/r7_full.js
 - フロント: React。雛形は `web/GyoseiQuiz.jsx`。**PWA**（オフライン・ホーム追加・ストア審査不要で複数端末）か Next.js。
   問題JSONはバンドル。`GyoseiQuiz.jsx` の `QUESTIONS` 定数を `r7_full.json` の import に差し替える。
 - 履歴同期: Supabase（無料枠で1ユーザーぶんは充分）。`history` は上記の集計型で upsert（attempts/correct_count を +1 加算）。
+  - **個人用プロジェクト（非公開）** を使う。公開用プロジェクトのキーと混在させない。
+  - **schema = `scrivener`**（public に置かない）。supabase-js は `createClient(..., { db: { schema: "scrivener" } })` で初期化。
+  - **単一ユーザー / anon は全拒否。** RLS で `auth.uid() = user_id`（＝Supabase Auth でサインインした本人の行だけ）。
+    anon には schema usage を revoke 済みなので、Exposed schemas に出しても anon からは何も見えない。
+  - 接続情報（URL・anon key）は **`.env` から読む**（ハードコード禁止・`.gitignore` 済み）。env 変数は Vite 規約の `VITE_` プレフィックス。
+  - 不変条件は維持: **問題本文を同期しない。** `history` に送るのは `question_id` と集計値（attempts/correct_count/last_result/last_chosen）のみ。
 - デザイン: 「答案用紙」メタファー。藍墨(#1c2c4c)＋朱(#c43d2b)、設問は明朝・UIはゴシック、
   採点は○×の朱印スタンプ、記述式はマス目、択一はマークシート円。トークンは `GyoseiQuiz.jsx` 上部の `C` を参照。
 

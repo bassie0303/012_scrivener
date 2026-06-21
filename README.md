@@ -56,8 +56,13 @@ npm run build      # dist/ に PWA をビルド
 - 実過去問を使うには、パイプライン生成物を `web/public/data/questions.json` に**手動配置**する
   （`.gitignore` 済み・配置すると自動で読み込まれる）。形式は [web/public/data/README.md](web/public/data/README.md)。
 - 履歴は **IndexedDB** に永続化（リロードで消えない）。
-- **Supabase 同期（任意）**: `web/.env`（`.env.example` 参照）にキーを入れ、
-  [web/supabase/schema.sql](web/supabase/schema.sql) を Supabase で実行すると、複数端末で履歴が合算同期される。
+- **Supabase 同期（任意 / 個人用プロジェクト・非公開）**:
+  1. `web/.env`（`.env.example` 参照）に **個人用プロジェクトの** URL・anon key を入れる（公開用プロジェクトのキーと混在させない）。
+  2. [web/supabase/migrations/0001_scrivener_history.sql](web/supabase/migrations/0001_scrivener_history.sql) を Supabase の SQL Editor で実行（手動）。
+  3. **Supabase ダッシュボード → Settings → API → Exposed schemas に `scrivener` を追加する**（anon は権限ゼロなのでアクセスできるのは本人だけ）。
+  4. アプリ画面のフォームからメール＋パスワードでサインインすると同期が有効になる。
+
+  schema=`scrivener` / RLS は `auth.uid() = user_id`（本人の行だけ・anon 全拒否）。
   同期内容は `question_id` と集計値のみ（問題本文は送らない）。
 
 ## 状態
