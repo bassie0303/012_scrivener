@@ -72,12 +72,14 @@ npm run build      # dist/ に PWA をビルド
 - 履歴は **IndexedDB** に永続化（リロードで消えない）。
 - **Supabase 同期（任意 / 個人用プロジェクト・非公開）**:
   1. `web/.env`（`.env.example` 参照）に **個人用プロジェクトの** URL・anon key を入れる（公開用プロジェクトのキーと混在させない）。
-  2. [web/supabase/migrations/0001_scrivener_history.sql](web/supabase/migrations/0001_scrivener_history.sql) を Supabase の SQL Editor で実行（手動）。
+  2. `web/supabase/migrations/` の SQL を Supabase の SQL Editor で実行（手動・順番に）。
+     - [0001_scrivener_history.sql](web/supabase/migrations/0001_scrivener_history.sql) … 履歴（解答回数・正答数）
+     - [0002_scrivener_prefs.sql](web/supabase/migrations/0002_scrivener_prefs.sql) … 出題フィルタ等のUI設定をデバイス間で同期
   3. **Supabase ダッシュボード → Settings → API → Exposed schemas に `scrivener` を追加する**（anon は権限ゼロなのでアクセスできるのは本人だけ）。
   4. アプリ画面のフォームからメール＋パスワードでサインインすると同期が有効になる。
 
   schema=`scrivener` / RLS は `auth.uid() = user_id`（本人の行だけ・anon 全拒否）。
-  同期内容は `question_id` と集計値のみ（問題本文は送らない）。
+  同期内容は履歴（question_id と集計値）と出題フィルタ設定のみ（**問題本文は送らない**）。
 
 ## 状態
 

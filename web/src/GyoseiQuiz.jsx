@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
 import { loadQuestions, importQuestions, clearImportedQuestions } from "./data/loadQuestions.js";
 import { loadLocalHistory, recordAnswer, syncFromServer } from "./lib/history.js";
 import { isSupabaseConfigured, getCurrentUser, signIn, signOut, onAuthChange } from "./lib/supabase.js";
+import { loadRemotePrefs, saveRemotePrefs } from "./lib/prefs.js";
 
 /**
  * 行政書士試験 問題集アプリ — UI（PWA / 永続化対応）
@@ -148,10 +149,34 @@ export default function GyoseiQuiz() {
   const [studyFilter, setStudyFilter] = useState(() => loadPrefs().studyFilter || "all"); // all/unseen/wrong/low
   const [deckNonce, setDeckNonce] = useState(0);            // 明示的な出題し直し
 
-  // フィルタの変更を端末に保存（次回起動時に復元）
+  // フィルタの変更を端末に保存（次回起動時に復元）。サインイン中はサーバーにも反映してデバイス間で揃える。
+  const remoteReadyRef = useRef(false); // サーバーから一度読み込むまでは push しない（他端末の設定を上書きしないため）
   useEffect(() => {
-    savePrefs({ mode, fields: selectedFields, years: selectedYears, studyFilter });
+    const p = { mode, fields: selectedFields, years: selectedYears, studyFilter };
+    savePrefs(p);
+    if (remoteReadyRef.current) saveRemotePrefs(p).catch(() => {});
   }, [mode, selectedFields, selectedYears, studyFilter]);
+
+  // サインインしたらサーバーの設定でフィルタを揃える（別デバイスの続きを反映）
+  useEffect(() => {
+    if (!user) { remoteReadyRef.current = false; return; }
+    let alive = true;
+    loadRemotePrefs().then((p) => {
+      if (!alive) return;
+      if (p) {
+        if (p.mode) setMode(p.mode);
+        setSelectedFields(p.fields || []);
+        setSelectedYears(p.years || []);
+        setStudyFilter(p.studyFilter || "all");
+        setIdx(0); resetTransient();
+      } else {
+        // サーバー未保存なら、この端末の現在のフィルタを初期保存
+        saveRemotePrefs({ mode, fields: selectedFields, years: selectedYears, studyFilter }).catch(() => {});
+      }
+      remoteReadyRef.current = true; // 以後の変更はサーバーへも反映
+    });
+    return () => { alive = false; };
+  }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // デッキ構築は履歴のスナップショットで行う（解答のたびに並びが変わらないように）
   const historyRef = useRef(history);
