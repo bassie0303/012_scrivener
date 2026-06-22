@@ -91,7 +91,7 @@ def generate_one(client, q):
     schema = build_schema(q)
     resp = client.messages.create(
         model=MODEL,
-        max_tokens=2000,
+        max_tokens=4000,  # adaptive thinking のぶんも含め余裕を持たせる
         thinking={"type": "adaptive"},
         system=[{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}],
         output_config={"format": {"type": "json_schema", "schema": schema}},
