@@ -73,11 +73,21 @@ function filterQuestions(questions, { fields, years, studyFilter, history }) {
   return qs;
 }
 
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
 function buildDeck(questions, mode, opts = {}) {
-  const qs = filterQuestions(questions, {
+  let qs = filterQuestions(questions, {
     fields: opts.fields, years: opts.years,
     studyFilter: opts.studyFilter, history: opts.history || {},
   });
+  if (opts.order === "random") qs = shuffle(qs); // B-1: ランダム出題（問題単位でシャッフル）
   if (mode !== "ox") return qs.map((q) => ({ kind: q.type, ...q }));
   const deck = [];
   for (const q of qs) {
@@ -163,20 +173,31 @@ export default function GyoseiQuiz() {
     try { localStorage.setItem("fontScale", String(v)); } catch {}
   }
 
+  // 行間倍率（B-1。端末に保存）
+  const [lineScale, setLineScale] = useState(() => {
+    const v = parseFloat(typeof localStorage !== "undefined" && localStorage.getItem("lineScale"));
+    return v >= 0.8 && v <= 1.4 ? v : 1.0;
+  });
+  function changeLineScale(v) {
+    setLineScale(v);
+    try { localStorage.setItem("lineScale", String(v)); } catch {}
+  }
+
   // 画面（出題 / 集計）と出題フィルタ。フィルタは端末に保存され、次回も復元される。
   const [view, setView] = useState("quiz");
   const [selectedFields, setSelectedFields] = useState(() => loadPrefs().fields || []); // [] = 全分野
   const [selectedYears, setSelectedYears] = useState(() => loadPrefs().years || []);     // [] = 全年度
   const [studyFilter, setStudyFilter] = useState(() => loadPrefs().studyFilter || "all"); // all/unseen/wrong/low
+  const [order, setOrder] = useState(() => loadPrefs().order || "seq"); // seq=順番どおり / random=ランダム
   const [deckNonce, setDeckNonce] = useState(0);            // 明示的な出題し直し
 
   // フィルタの変更を端末に保存（次回起動時に復元）。サインイン中はサーバーにも反映してデバイス間で揃える。
   const remoteReadyRef = useRef(false); // サーバーから一度読み込むまでは push しない（他端末の設定を上書きしないため）
   useEffect(() => {
-    const p = { mode, fields: selectedFields, years: selectedYears, studyFilter };
+    const p = { mode, fields: selectedFields, years: selectedYears, studyFilter, order };
     savePrefs(p);
     if (remoteReadyRef.current) saveRemotePrefs(p).catch(() => {});
-  }, [mode, selectedFields, selectedYears, studyFilter]);
+  }, [mode, selectedFields, selectedYears, studyFilter, order]);
 
   // サインインしたらサーバーの設定でフィルタを揃える（別デバイスの続きを反映）
   useEffect(() => {
@@ -189,10 +210,11 @@ export default function GyoseiQuiz() {
         setSelectedFields(p.fields || []);
         setSelectedYears(p.years || []);
         setStudyFilter(p.studyFilter || "all");
+        if (p.order) setOrder(p.order);
         setIdx(0); resetTransient();
       } else {
         // サーバー未保存なら、この端末の現在のフィルタを初期保存
-        saveRemotePrefs({ mode, fields: selectedFields, years: selectedYears, studyFilter }).catch(() => {});
+        saveRemotePrefs({ mode, fields: selectedFields, years: selectedYears, studyFilter, order }).catch(() => {});
       }
       remoteReadyRef.current = true; // 以後の変更はサーバーへも反映
     });
@@ -262,8 +284,8 @@ export default function GyoseiQuiz() {
   // 解答では並びを固定したいので history はスナップショット(ref)で参照し、
   // フィルタ変更/出題し直し(deckNonce)時にだけ作り直す。
   const deck = useMemo(
-    () => (questions ? buildDeck(questions, mode, { fields: selectedFields, years: selectedYears, studyFilter, history: historyRef.current }) : []),
-    [questions, mode, fieldsKey, yearsKey, studyFilter, deckNonce] // eslint-disable-line react-hooks/exhaustive-deps
+    () => (questions ? buildDeck(questions, mode, { fields: selectedFields, years: selectedYears, studyFilter, order, history: historyRef.current }) : []),
+    [questions, mode, fieldsKey, yearsKey, studyFilter, order, deckNonce] // eslint-disable-line react-hooks/exhaustive-deps
   );
   const entry = deck[idx];
   const rec = entry ? history[entry.id] : null;
@@ -325,10 +347,30 @@ export default function GyoseiQuiz() {
     return { unseen, review, mastered, total };
   }, [questions, history]);
 
+  // B-2: ○×一問一答に変換できない5択の取りこぼし一覧（極性判定不能 / 組合せ問題）
+  const oxIssues = useMemo(() => {
+    const combo = [], polarity = [];
+    for (const q of questions || []) {
+      if (q.type !== "tantou5" || !q.choices || Object.keys(q.choices).length === 0) continue;
+      if (!detectPolarity(q.stem)) polarity.push(`${q.year}-${q.number}`);
+      else if (isCombo(q.choices)) combo.push(`${q.year}-${q.number}`);
+    }
+    return { combo, polarity };
+  }, [questions]);
+
   function rebuildDeck() { setIdx(0); resetTransient(); setDeckNonce((n) => n + 1); }
   function applyFields(next) { setSelectedFields(next); rebuildDeck(); }
   function applyYears(next) { setSelectedYears(next); rebuildDeck(); }
   function applyStudyFilter(s) { setStudyFilter(s); rebuildDeck(); }
+  function applyOrder(o) { setOrder(o); rebuildDeck(); }                       // B-1
+  function clearAllFilters() { setSelectedFields([]); setSelectedYears([]); setStudyFilter("all"); rebuildDeck(); } // B-3
+
+  // B-3: 現データに存在しない年度/分野が保存フィルタに残って0件になるのを防ぐ（読込時に正規化）
+  useEffect(() => {
+    if (!questions) return;
+    setSelectedYears((prev) => { const n = prev.filter((y) => allYears.includes(y)); return n.length === prev.length ? prev : n; });
+    setSelectedFields((prev) => { const n = prev.filter((f) => allFields.includes(f)); return n.length === prev.length ? prev : n; });
+  }, [allYears, allFields]); // eslint-disable-line react-hooks/exhaustive-deps
   // 集計画面から「この分野を弱点学習」: 分野を絞り+間違い/未挑戦中心に出題
   function studyField(field) {
     setSelectedFields([field]); setStudyFilter("wrong"); setView("quiz");
@@ -409,7 +451,7 @@ export default function GyoseiQuiz() {
       : synced ? "同期済み" : "サインイン済み（同期中…）";
 
   return (
-    <div style={{ background: C.bg, minHeight: "100%", fontFamily: GOTHIC, color: C.ink, "--rs": fontScale }}>
+    <div style={{ background: C.bg, minHeight: "100%", fontFamily: GOTHIC, color: C.ink, "--rs": fontScale, "--ls": lineScale }}>
       <style>{`
         @keyframes stampIn{0%{opacity:0;transform:scale(1.6) rotate(-12deg)}
           60%{opacity:1;transform:scale(.92) rotate(-12deg)}100%{transform:scale(1) rotate(-12deg)}}
@@ -430,6 +472,7 @@ export default function GyoseiQuiz() {
           </div>
           <div className="flex items-center" style={{ gap: 8, fontSize: 11, color: C.inkSoft }}>
             <FontSizeControl scale={fontScale} onChange={changeFontScale} />
+            <LineSpacingControl scale={lineScale} onChange={changeLineScale} />
             {source === "sample" && (
               <span style={{ color: C.shu, border: `1px solid ${C.shu}`, borderRadius: 2, padding: "2px 6px" }}>サンプル問題</span>
             )}
@@ -442,7 +485,7 @@ export default function GyoseiQuiz() {
         <QuestionsBar source={source} count={questions.length} onChange={reloadQuestions} />
 
         {view === "dash" ? (
-          <Dashboard fieldStats={fieldStats} statusCounts={statusCounts}
+          <Dashboard fieldStats={fieldStats} statusCounts={statusCounts} oxIssues={oxIssues}
             selectedFields={selectedFields} onStudyField={studyField} onPickField={applyFields} />
         ) : (
         <>
@@ -452,13 +495,18 @@ export default function GyoseiQuiz() {
           allFields={allFields} selectedFields={selectedFields} onFields={applyFields}
           allYears={allYears} selectedYears={selectedYears} onYears={applyYears}
           studyFilter={studyFilter} onStudyFilter={applyStudyFilter}
+          order={order} onOrder={applyOrder}
           deckLen={deck.length} onRebuild={rebuildDeck}
         />
 
         {!entry ? (
           <div style={{ background: C.paper, border: `1px solid ${C.line}`, borderRadius: 4, padding: "40px 22px", textAlign: "center", color: C.inkSoft }}>
             <div style={{ fontFamily: MINCHO, fontSize: 16, marginBottom: 8 }}>該当する問題がありません</div>
-            <div style={{ fontSize: 12 }}>分野や「学習対象」の条件をゆるめてください（例: 学習対象を「すべて」に）。</div>
+            <div style={{ fontSize: 12, marginBottom: 14 }}>分野や「学習対象」の条件をゆるめてください（例: 学習対象を「すべて」に）。</div>
+            <button className="opt" onClick={clearAllFilters}
+              style={{ background: C.ink, color: "#fff", border: "none", borderRadius: 4, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: GOTHIC }}>
+              フィルタを全解除
+            </button>
           </div>
         ) : (
         <>
@@ -498,9 +546,9 @@ export default function GyoseiQuiz() {
             <OXItem entry={entry} picked={picked} submitted={submitted} onPick={judgeOX} />
           ) : (
             <>
-              <p style={{ fontFamily: MINCHO, fontSize: "calc(16px * var(--rs))", lineHeight: 1.9, margin: "0 0 18px", whiteSpace: "pre-wrap" }}>{entry.stem}</p>
+              <p style={{ fontFamily: MINCHO, fontSize: "calc(16px * var(--rs))", lineHeight: "calc(1.9 * var(--ls))", margin: "0 0 18px", whiteSpace: "pre-wrap" }}>{entry.stem}</p>
               {entry.reference && (
-                <div style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 3, padding: "10px 12px", fontSize: "calc(13px * var(--rs))", lineHeight: 1.8, color: C.inkSoft, margin: "0 0 18px" }}>
+                <div style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 3, padding: "10px 12px", fontSize: "calc(13px * var(--rs))", lineHeight: "calc(1.8 * var(--ls))", color: C.inkSoft, margin: "0 0 18px" }}>
                   <span style={{ color: C.ink, fontWeight: 700 }}>参照条文　</span>{entry.reference}
                 </div>
               )}
@@ -690,13 +738,32 @@ function FontSizeControl({ scale, onChange }) {
   );
 }
 
+/* ═══════════ 行間調整（B-1） ═══════════ */
+function LineSpacingControl({ scale, onChange }) {
+  const steps = [["詰", 0.85], ["標準", 1.0], ["広", 1.2]];
+  return (
+    <div className="flex items-center" style={{ gap: 2, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 6, padding: 2 }}>
+      <span style={{ fontSize: 11, color: C.inkSoft, padding: "0 4px" }} aria-hidden>行間</span>
+      {steps.map(([lbl, v]) => {
+        const active = Math.abs(scale - v) < 0.001;
+        return (
+          <button key={lbl} className="opt" onClick={() => onChange(v)}
+            aria-label={`行間 ${lbl}`} aria-pressed={active}
+            style={{ background: active ? C.ink : "transparent", color: active ? "#fff" : C.inkSoft,
+              border: "none", borderRadius: 4, padding: "3px 7px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: GOTHIC }}>{lbl}</button>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ═══════════ 出題条件バー（分野・学習対象・モード） ═══════════ */
 function chip(active) {
   return { background: active ? C.ink : "#fff", color: active ? "#fff" : C.inkSoft,
     border: `1px solid ${active ? C.ink : C.line}`, borderRadius: 999, padding: "3px 10px",
     fontSize: 11, cursor: "pointer", fontFamily: GOTHIC };
 }
-function FilterBar({ mode, onMode, allFields, selectedFields, onFields, allYears, selectedYears, onYears, studyFilter, onStudyFilter, deckLen, onRebuild }) {
+function FilterBar({ mode, onMode, allFields, selectedFields, onFields, allYears, selectedYears, onYears, studyFilter, onStudyFilter, order, onOrder, deckLen, onRebuild }) {
   const sel = new Set(selectedFields);
   function toggle(f) {
     const next = new Set(sel);
@@ -726,6 +793,13 @@ function FilterBar({ mode, onMode, allFields, selectedFields, onFields, allYears
             {studyOpts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
         </label>
+        <div className="flex gap-1" style={{ background: C.bg, borderRadius: 6, padding: 3 }}>
+          {[["seq", "順番"], ["random", "ランダム"]].map(([o, l]) => (
+            <button key={o} className="opt" onClick={() => onOrder(o)} style={{
+              background: order === o ? C.ink : "transparent", color: order === o ? "#fff" : C.inkSoft,
+              border: "none", borderRadius: 4, padding: "5px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: GOTHIC }}>{l}</button>
+          ))}
+        </div>
         <span style={{ fontSize: 11, color: C.inkSoft, marginLeft: "auto" }}>{deckLen}問</span>
         <button className="opt" onClick={onRebuild} style={{ background: "transparent", color: C.inkSoft, border: `1px solid ${C.line}`, borderRadius: 4, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontFamily: GOTHIC }}>出題し直す</button>
       </div>
@@ -755,8 +829,10 @@ function miniBtn(primary) {
     border: `1px solid ${primary ? C.shu : C.line}`, borderRadius: 4, padding: "4px 10px",
     fontSize: 11, cursor: "pointer", fontFamily: GOTHIC };
 }
-function Dashboard({ fieldStats, statusCounts, onStudyField, onPickField }) {
+function Dashboard({ fieldStats, statusCounts, oxIssues, onStudyField, onPickField }) {
+  const [showOx, setShowOx] = useState(false);
   const pct = (n) => Math.round(n * 100);
+  const oxMiss = oxIssues ? oxIssues.combo.length + oxIssues.polarity.length : 0;
   const done = statusCounts.total - statusCounts.unseen;
   const overallCov = statusCounts.total ? done / statusCounts.total : 0;
   return (
@@ -801,6 +877,25 @@ function Dashboard({ fieldStats, statusCounts, onStudyField, onPickField }) {
           );
         })}
       </div>
+
+      {/* B-2: ○×一問一答に変換できない5択の取りこぼし一覧 */}
+      {oxMiss > 0 && (
+        <div className="mt-5" style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px 12px" }}>
+          <div className="flex items-center justify-between">
+            <span style={{ fontSize: 12, color: C.inkSoft }}>
+              ○×一問一答に変換できない5択：<b style={{ color: C.ink }}>{oxMiss}</b>問
+              <span style={{ marginLeft: 6 }}>（組合せ {oxIssues.combo.length} / 極性不明 {oxIssues.polarity.length}）</span>
+            </span>
+            <button className="opt" onClick={() => setShowOx((v) => !v)} style={miniBtn(false)}>{showOx ? "閉じる" : "一覧"}</button>
+          </div>
+          {showOx && (
+            <div className="mt-2 pt-2" style={{ borderTop: `1px dashed ${C.line}`, fontSize: 11, color: C.inkSoft, lineHeight: "calc(1.9 * var(--ls))" }}>
+              {oxIssues.combo.length > 0 && <div><b style={{ color: C.ink }}>組合せ問題</b>（5択のまま出題）：{oxIssues.combo.join("、")}</div>}
+              {oxIssues.polarity.length > 0 && <div className="mt-1"><b style={{ color: C.ink }}>極性判定不能</b>（正誤どちらを選ぶか不明）：{oxIssues.polarity.join("、")}</div>}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -834,7 +929,7 @@ function Explanation({ entry }) {
               const isAnswer = entry.answer === n;
               return (
                 <div key={n} className="flex items-start gap-2"
-                  style={{ fontSize: "calc(13px * var(--rs))", lineHeight: 1.8, color: C.ink }}>
+                  style={{ fontSize: "calc(13px * var(--rs))", lineHeight: "calc(1.8 * var(--ls))", color: C.ink }}>
                   <span style={{ flexShrink: 0, fontFamily: MINCHO, fontWeight: 700,
                     color: isAnswer ? C.shu : C.inkSoft }}>{n}{isAnswer ? "○" : "×"}</span>
                   <span style={{ color: C.inkSoft }}>{ce[n]}</span>
@@ -851,7 +946,7 @@ function ExplBlock({ label, text }) {
   return (
     <div style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 4, padding: "10px 12px" }}>
       <div style={{ fontSize: 11, color: C.shu, marginBottom: 4, fontWeight: 700 }}>{label}</div>
-      <div style={{ fontFamily: MINCHO, fontSize: "calc(14px * var(--rs))", lineHeight: 1.9, color: C.ink, whiteSpace: "pre-wrap" }}>{text}</div>
+      <div style={{ fontFamily: MINCHO, fontSize: "calc(14px * var(--rs))", lineHeight: "calc(1.9 * var(--ls))", color: C.ink, whiteSpace: "pre-wrap" }}>{text}</div>
     </div>
   );
 }
@@ -860,7 +955,7 @@ function OXItem({ entry, picked, submitted, onPick }) {
   return (
     <div>
       <div style={{ fontSize: 12, color: C.inkSoft, marginBottom: 8 }}>次の記述は正しいか、誤っているか。</div>
-      <p style={{ fontFamily: MINCHO, fontSize: "calc(16px * var(--rs))", lineHeight: 1.95, margin: "0 0 18px" }}>{entry.statement}</p>
+      <p style={{ fontFamily: MINCHO, fontSize: "calc(16px * var(--rs))", lineHeight: "calc(1.95 * var(--ls))", margin: "0 0 18px" }}>{entry.statement}</p>
       <div className="grid grid-cols-2 gap-3">
         {[["○", "正しい"], ["×", "誤り"]].map(([sym, lbl]) => {
           const isPick = picked === sym, isAnsTrue = (sym === "○") === entry.isTrue;
@@ -900,7 +995,7 @@ function Tantou({ q, picked, setPicked, submitted }) {
               border: `2px solid ${ring}`, background: fill, color: fill === "transparent" ? ring : "#fff",
               display: "inline-flex", alignItems: "center", justifyContent: "center",
               fontSize: 13, fontWeight: 700, marginTop: 1, fontFamily: MINCHO }}>{mark || n}</span>
-            <span style={{ fontFamily: MINCHO, fontSize: "calc(14.5px * var(--rs))", lineHeight: 1.8 }}>{text}</span>
+            <span style={{ fontFamily: MINCHO, fontSize: "calc(14.5px * var(--rs))", lineHeight: "calc(1.8 * var(--ls))" }}>{text}</span>
           </button>
         );
       })}
@@ -932,7 +1027,7 @@ function Tashi({ q, blanks, setBlanks, submitted }) {
       <div style={{ fontSize: 11, color: C.inkSoft, marginBottom: 6 }}>語群</div>
       <div className="grid grid-cols-2 gap-x-4 gap-y-1" style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 3, padding: "10px 12px" }}>
         {Object.entries(q.word_bank).map(([n, t]) => (
-          <div key={n} style={{ fontSize: "calc(12.5px * var(--rs))", lineHeight: 1.7, color: C.inkSoft }}>
+          <div key={n} style={{ fontSize: "calc(12.5px * var(--rs))", lineHeight: "calc(1.7 * var(--ls))", color: C.inkSoft }}>
             <span style={{ color: C.ink, fontWeight: 700 }}>{n}.</span> {t}
           </div>
         ))}
@@ -960,14 +1055,14 @@ function Kijutsu({ q, revealed, setRevealed }) {
       <textarea value={draft} onChange={(e) => setDraft(e.target.value)}
         placeholder="ここに入力するとマス目に反映されます（40字程度）" rows={2} className="opt w-full"
         style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 3, padding: "8px 10px",
-          fontFamily: MINCHO, fontSize: "calc(13px * var(--rs))", lineHeight: 1.8, color: C.ink, resize: "vertical", marginBottom: 12 }} />
+          fontFamily: MINCHO, fontSize: "calc(13px * var(--rs))", lineHeight: "calc(1.8 * var(--ls))", color: C.ink, resize: "vertical", marginBottom: 12 }} />
       {!revealed ? (
         <button className="opt" onClick={() => setRevealed(true)} style={{ background: "transparent",
           color: C.shu, border: `1px solid ${C.shu}`, borderRadius: 4, padding: "8px 14px", fontSize: 13, cursor: "pointer" }}>正解例を表示</button>
       ) : (
         <div style={{ background: C.shuSoft, border: "1px solid #e3b9b1", borderRadius: 4, padding: "12px 14px" }}>
           <div style={{ fontSize: 11, color: C.shu, marginBottom: 4 }}>正解例（{q.answer.length}字）</div>
-          <div style={{ fontFamily: MINCHO, fontSize: "calc(15px * var(--rs))", lineHeight: 1.9 }}>{q.answer.model}</div>
+          <div style={{ fontFamily: MINCHO, fontSize: "calc(15px * var(--rs))", lineHeight: "calc(1.9 * var(--ls))" }}>{q.answer.model}</div>
         </div>
       )}
     </div>
