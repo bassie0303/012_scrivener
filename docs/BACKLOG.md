@@ -8,6 +8,12 @@
 ## A. 学習体験
 
 ### A-1. AI解説の自動生成（2層構成）★大きめ
+**状態: アプリ表示＋生成スクリプトは実装済み（2026-06-22）。実データへの一括生成（API実行）は未実施。**
+- アプリ: 解答後に「総合解説 → 各肢の解説」を表示。○×一問一答ではその肢の肢別解説を表示。サンプル問題には解説入り。
+- 生成: `data/pipeline/generate_explanations.py`（Opus 4.8・構造化出力・再開可能）。要 `ANTHROPIC_API_KEY`。
+  - 実行: `python generate_explanations.py ../processed/questions.json`（試運転 `--limit 3`）→ `web/public/data/questions.json` にコピー、各端末で取り込み直し。
+  - 概算 約$6（≈1,000円）/1回・331問。Batches APIで半額化は将来候補。
+
 各問に解説を付け、解答後に表示する。解説はAI生成の独自コメント＝著作権上問題なし。
 **保存先は端末ローカルの `questions.json`（同期・公開しない）。**
 

@@ -46,6 +46,7 @@ function toOX(q) {
     year: q.year, number: q.number, field: q.field, choiceNo: n,
     statement,
     isTrue: pol === "find_false" ? n !== q.answer : n === q.answer,
+    expl: q.choice_explanations ? q.choice_explanations[n] : undefined, // 肢別解説
   }));
 }
 /* 年度・分野・解答履歴で出題対象を絞り込む（弱点分野学習・未挑戦のみ 等） */
@@ -486,6 +487,7 @@ export default function GyoseiQuiz() {
               </div>
             </div>
           )}
+          {submitted && <Explanation entry={entry} />}
         </article>
 
         <div className="flex items-center justify-between mt-5">
@@ -761,6 +763,57 @@ function Dashboard({ fieldStats, statusCounts, onStudyField, onPickField }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/* ═══════════ 解説（総合 + 肢別。AI生成・端末ローカル） ═══════════ */
+function Explanation({ entry }) {
+  // ○×一問一答: その肢の肢別解説のみ
+  if (entry.kind === "ox") {
+    if (!entry.expl) return null;
+    return (
+      <div className="mt-4 pt-4" style={{ borderTop: `1px dashed ${C.line}` }}>
+        <ExplBlock label="解説" text={entry.expl} />
+      </div>
+    );
+  }
+
+  const hasSummary = !!entry.explanation;
+  const ce = entry.choice_explanations;
+  const hasChoiceExpl = entry.type === "tantou5" && ce && Object.keys(ce).length > 0;
+  if (!hasSummary && !hasChoiceExpl) return null;
+
+  return (
+    <div className="mt-4 pt-4" style={{ borderTop: `1px dashed ${C.line}` }}>
+      {hasSummary && <ExplBlock label="解説" text={entry.explanation} />}
+      {hasChoiceExpl && (
+        <div className="mt-3">
+          <div style={{ fontSize: 11, color: C.inkSoft, marginBottom: 6 }}>各肢の解説</div>
+          <div className="flex flex-col gap-2">
+            {Object.entries(entry.choices).map(([n, _text]) => {
+              if (!ce[n]) return null;
+              const isAnswer = entry.answer === n;
+              return (
+                <div key={n} className="flex items-start gap-2"
+                  style={{ fontSize: "calc(13px * var(--rs))", lineHeight: 1.8, color: C.ink }}>
+                  <span style={{ flexShrink: 0, fontFamily: MINCHO, fontWeight: 700,
+                    color: isAnswer ? C.shu : C.inkSoft }}>{n}{isAnswer ? "○" : "×"}</span>
+                  <span style={{ color: C.inkSoft }}>{ce[n]}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+function ExplBlock({ label, text }) {
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 4, padding: "10px 12px" }}>
+      <div style={{ fontSize: 11, color: C.shu, marginBottom: 4, fontWeight: 700 }}>{label}</div>
+      <div style={{ fontFamily: MINCHO, fontSize: "calc(14px * var(--rs))", lineHeight: 1.9, color: C.ink, whiteSpace: "pre-wrap" }}>{text}</div>
     </div>
   );
 }

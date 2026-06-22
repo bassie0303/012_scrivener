@@ -54,6 +54,9 @@ venv: `python3 -m venv venv && ./venv/bin/pip install -r requirements.txt`（pdf
 - `add_answers.py` … 正解HTML → answer 付与（型別・字数チェックサム・欠番正解は `_orphan_answers.json` へ退避）
 - `classify_field.py` … 分野分類（番号レンジ主軸＋設問文の明示キーワードで補正。9分野）
 - `build_questions.py` … 全年度を一括処理して結合・記述の正解例整形・分野付与・`raw`除去 → 1ファイル出力
+- `generate_explanations.py` … AI解説（総合＋肢別）を生成して questions.json に追記（任意・要 `ANTHROPIC_API_KEY`）。
+  解説はAI生成の独自コメント＝著作権上問題なし。保存は端末ローカルのみ（同期・公開しない）。
+  `python generate_explanations.py ../processed/questions.json [--limit N] [--force]`（既存解説はスキップ＝再開可能）
 
 ```bash
 cd data/pipeline
@@ -87,11 +90,14 @@ cd data/pipeline
   "answer": "4"                                // tantou5
          |  { "ア": "5", "イ": "10", "ウ": "19", "エ": "13" }   // tashi
          |  { "model": "…正解例…", "length": 36 },              // kijutsu
-  "note": null
+  "note": null,
+  "explanation": "…総合解説…",                         // 任意。generate_explanations.py が付与
+  "choice_explanations": { "1": "…", "5": "…" }       // 任意・tantou5のみ。肢別解説（○×でも使用）
 }
 ```
 分野（`field`）: 基礎法学 / 憲法 / 行政法 / 民法 / 商法・会社法 / 政治・経済・社会 /
 情報通信・個人情報保護 / 行政書士法等 / 文章理解。
+解説（`explanation` / `choice_explanations`）はAI生成・端末ローカルのみ。アプリは解答後に「総合→各肢」を表示。
 ＊`raw`（原文）は `build_questions.py` が端末配布版で除去する（容量・本文露出を減らす）。
 
 履歴（Supabase `history` テーブル。**問題本文は含めない**）:
