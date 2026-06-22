@@ -134,16 +134,23 @@ def main():
     print(f"対象 {len(todo)} 問 / 全 {len(flat)} 問", file=sys.stderr)
     done, failed = 0, []
     for k, (y, i, q) in enumerate(todo, 1):
-        try:
-            out = generate_one(client, q)
+        out, err = None, None
+        for attempt in range(4):  # 接続エラー/JSON途中切れに自前リトライ（指数バックオフ）
+            try:
+                out = generate_one(client, q)
+                break
+            except Exception as e:
+                err = e
+                time.sleep(2 * (2 ** attempt))  # 2,4,8,16秒
+        if out is not None:
             data[y][i]["explanation"] = out["summary"].strip()
             if q["type"] == "tantou5" and isinstance(out.get("choices"), dict):
                 data[y][i]["choice_explanations"] = {n: v.strip() for n, v in out["choices"].items()}
             done += 1
             print(f"  [{k}/{len(todo)}] {q['id']} ✓", file=sys.stderr)
-        except Exception as e:
-            failed.append((q["id"], str(e)))
-            print(f"  [{k}/{len(todo)}] {q['id']} ✗ {e}", file=sys.stderr)
+        else:
+            failed.append((q["id"], str(err)))
+            print(f"  [{k}/{len(todo)}] {q['id']} ✗ {err}", file=sys.stderr)
         # 5問ごとに途中保存（中断しても再開できる）
         if k % 5 == 0:
             with open(args.path, "w", encoding="utf-8") as f:
