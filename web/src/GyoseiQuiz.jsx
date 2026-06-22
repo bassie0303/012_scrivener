@@ -96,6 +96,26 @@ const FIELD_ORDER = [
   "政治・経済・社会", "情報通信・個人情報保護", "行政書士法等", "文章理解", "その他",
 ];
 
+/* ═══════════ 正誤の星（過去正解＝白星☆ / 過去誤答＝黒星★） ═══════════ */
+function Stars({ rec }) {
+  const correct = rec.correct_count;
+  const wrong = Math.max(0, rec.attempts - rec.correct_count);
+  const CAP = 10; // 多すぎる場合は上限＋「+N」で表示
+  const white = "☆".repeat(Math.min(correct, CAP));
+  const black = "★".repeat(Math.min(wrong, CAP));
+  return (
+    <span aria-label={`過去 正解${correct} 誤答${wrong}`} title={`正解 ${correct} / 誤答 ${wrong}`}
+      style={{ letterSpacing: 1, lineHeight: 1 }}>
+      {correct > 0 && (
+        <span style={{ color: C.shu }}>{white}{correct > CAP ? `+${correct - CAP}` : ""}</span>
+      )}
+      {wrong > 0 && (
+        <span style={{ color: C.ink, marginLeft: correct > 0 ? 3 : 0 }}>{black}{wrong > CAP ? `+${wrong - CAP}` : ""}</span>
+      )}
+    </span>
+  );
+}
+
 /* ═══════════ 採点スタンプ ═══════════ */
 function Stamp({ kind }) {
   const mark = kind === "maru" ? "○" : kind === "batsu" ? "×" : "△";
@@ -247,6 +267,23 @@ export default function GyoseiQuiz() {
   );
   const entry = deck[idx];
   const rec = entry ? history[entry.id] : null;
+
+  // A-2: 直前に見ていた問題を再開（起動時、保存IDがデッキにあればその位置へ。1回だけ）
+  const savedQidRef = useRef(typeof localStorage !== "undefined" ? localStorage.getItem("lastQuestionId") : null);
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current || !deck.length) return;
+    const id = savedQidRef.current;
+    if (id) {
+      const i = deck.findIndex((e) => e.id === id);
+      if (i >= 0) setIdx(i);
+    }
+    restoredRef.current = true;
+  }, [deck]);
+  // 現在の問題IDを端末に保存（次回起動で復元）。UI状態なので localStorage で可。
+  useEffect(() => {
+    if (entry?.id) { try { localStorage.setItem("lastQuestionId", entry.id); } catch {} }
+  }, [entry?.id]);
 
   const totals = useMemo(() => {
     const vals = Object.values(history);
@@ -449,9 +486,10 @@ export default function GyoseiQuiz() {
             <span className="inline-block" style={{ fontSize: 11, letterSpacing: 1, color: C.inkSoft, border: `1px solid ${C.line}`, borderRadius: 2, padding: "2px 8px" }}>
               {entry.field} ・ {entry.kind === "ox" ? "○×" : labelOf(entry.type)}
             </span>
-            {rec && (
-              <span style={{ fontSize: 11, color: C.inkSoft }}>
-                この問題：{rec.attempts}回中 <b style={{ color: C.ink }}>{rec.correct_count}</b> 正解
+            {rec && rec.attempts > 0 && (
+              <span className="flex items-center" style={{ fontSize: 11, color: C.inkSoft, gap: 6 }}>
+                <Stars rec={rec} />
+                <span>{rec.attempts}回中 <b style={{ color: C.ink }}>{rec.correct_count}</b> 正解</span>
               </span>
             )}
           </div>
