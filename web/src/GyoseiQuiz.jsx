@@ -106,18 +106,18 @@ const FIELD_ORDER = [
   "政治・経済・社会", "情報通信・個人情報保護", "行政書士法等", "文章理解", "その他",
 ];
 
-/* ═══════════ 正誤の星（過去正解＝白星☆ / 過去誤答＝黒星★） ═══════════ */
+/* ═══════════ 正誤の星（過去正解＝赤星★ / 過去誤答＝黒星★） ═══════════ */
 function Stars({ rec }) {
   const correct = rec.correct_count;
   const wrong = Math.max(0, rec.attempts - rec.correct_count);
   const CAP = 10; // 多すぎる場合は上限＋「+N」で表示
-  const white = "☆".repeat(Math.min(correct, CAP));
-  const black = "★".repeat(Math.min(wrong, CAP));
+  const red = "★".repeat(Math.min(correct, CAP));   // 正解＝赤星
+  const black = "★".repeat(Math.min(wrong, CAP));    // 誤答＝黒星
   return (
     <span aria-label={`過去 正解${correct} 誤答${wrong}`} title={`正解 ${correct} / 誤答 ${wrong}`}
       style={{ letterSpacing: 1, lineHeight: 1 }}>
       {correct > 0 && (
-        <span style={{ color: C.shu }}>{white}{correct > CAP ? `+${correct - CAP}` : ""}</span>
+        <span style={{ color: C.shu }}>{red}{correct > CAP ? `+${correct - CAP}` : ""}</span>
       )}
       {wrong > 0 && (
         <span style={{ color: C.ink, marginLeft: correct > 0 ? 3 : 0 }}>{black}{wrong > CAP ? `+${wrong - CAP}` : ""}</span>
