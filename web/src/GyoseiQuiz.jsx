@@ -91,7 +91,7 @@ function buildDeck(questions, mode, opts = {}) {
   if (mode !== "ox") return qs.map((q) => ({ kind: q.type, ...q }));
   const deck = [];
   for (const q of qs) {
-    if (q.type === "tantou5") {
+    if (q.type === "tantou5" && !q.all_correct) { // 全員正解(没問)は○×化しない
       const ox = toOX(q);
       if (ox) { deck.push(...ox); continue; }
     }
@@ -408,7 +408,7 @@ export default function GyoseiQuiz() {
   function judge() {
     let correct = null, chosen = null, res = null;
     if (entry.type === "tantou5") {
-      chosen = picked; correct = picked === entry.answer;
+      chosen = picked; correct = entry.all_correct ? true : picked === entry.answer; // 全員正解はどの肢でも正解
       res = correct ? "maru" : "batsu";
     } else if (entry.type === "tashi") {
       chosen = blanks;
@@ -566,7 +566,8 @@ export default function GyoseiQuiz() {
                 {result === "sankaku" && <b>部分正解</b>}
                 {result === "batsu" && <b>不正解</b>}
                 {entry.kind === "ox" && <span style={{ color: C.inkSoft }}>　この記述は{entry.isTrue ? "正しい" : "誤り"}</span>}
-                {entry.kind !== "ox" && entry.type !== "kijutsu" && (
+                {entry.all_correct && <span style={{ color: C.inkSoft }}>　全員正解（公式に没問）</span>}
+                {!entry.all_correct && entry.kind !== "ox" && entry.type !== "kijutsu" && (
                   <span style={{ color: C.inkSoft }}>　正解：{entry.type === "tashi"
                     ? ["ア", "イ", "ウ", "エ"].map((k) => `${k}=${entry.answer[k]}`).join(" ") : entry.answer}</span>
                 )}
@@ -980,7 +981,8 @@ function Tantou({ q, picked, setPicked, submitted }) {
   return (
     <div className="flex flex-col gap-2">
       {Object.entries(q.choices).map(([n, text]) => {
-        const isPicked = picked === n, isAnswer = q.answer === n;
+        // 全員正解(没問)は選んだ肢を正解扱いで表示
+        const isPicked = picked === n, isAnswer = q.all_correct ? isPicked : q.answer === n;
         let ring = "#cfc9ba", fill = "transparent", mark = "";
         if (submitted && isAnswer) { ring = C.shu; fill = C.shu; mark = "○"; }
         else if (submitted && isPicked && !isAnswer) { ring = C.shu; mark = "×"; }
