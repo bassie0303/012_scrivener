@@ -159,9 +159,11 @@ export default function GyoseiQuiz() {
   const [history, setHistory] = useState({});
   const [picked, setPicked] = useState(null);
   const [blanks, setBlanks] = useState({});
+  const [marks, setMarks] = useState({});   // 候補マーク {肢番号: 'keep'|'eliminate'}
   const [revealed, setRevealed] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [result, setResult] = useState(null);
+  function setMark(n, v) { setMarks((m) => { const x = { ...m }; if (v) x[n] = v; else delete x[n]; return x; }); }
 
   // 文字サイズ倍率（本文の読みやすさ。端末に保存）
   const [fontScale, setFontScale] = useState(() => {
@@ -399,7 +401,7 @@ export default function GyoseiQuiz() {
   }
 
   function resetTransient() {
-    setPicked(null); setBlanks({}); setRevealed(false);
+    setPicked(null); setBlanks({}); setMarks({}); setRevealed(false);
     setSubmitted(false); setResult(null);
   }
   function go(delta) {
@@ -556,7 +558,7 @@ export default function GyoseiQuiz() {
                   <span style={{ color: C.ink, fontWeight: 700 }}>参照条文　</span>{entry.reference}
                 </div>
               )}
-              {entry.type === "tantou5" && <Tantou q={entry} picked={picked} setPicked={setPicked} submitted={submitted} />}
+              {entry.type === "tantou5" && <Tantou q={entry} picked={picked} setPicked={setPicked} submitted={submitted} marks={marks} setMark={setMark} />}
               {entry.type === "tashi" && <Tashi q={entry} blanks={blanks} setBlanks={setBlanks} submitted={submitted} />}
               {entry.type === "kijutsu" && <Kijutsu q={entry} revealed={revealed} setRevealed={setRevealed} />}
             </>
@@ -918,32 +920,50 @@ function Explanation({ entry }) {
   }
 
   const hasSummary = !!entry.explanation;
-  const ce = entry.choice_explanations;
-  const hasChoiceExpl = entry.type === "tantou5" && ce && Object.keys(ce).length > 0;
-  if (!hasSummary && !hasChoiceExpl) return null;
+  const se = entry.type === "tantou5" ? entry.statement_explanations : null; // 組合せ問題の記述別
+  const ce = entry.type === "tantou5" ? entry.choice_explanations : null;     // 通常5択の肢別
+  const hasSE = se && Object.keys(se).length > 0;
+  const hasCE = !hasSE && ce && Object.keys(ce).length > 0;
+  if (!hasSummary && !hasSE && !hasCE) return null;
+
+  const comboNote = hasSE && entry.answer
+    ? `正解の組合せ：${entry.answer}（${(entry.choices || {})[entry.answer] || ""}）` : null;
 
   return (
     <div className="mt-4 pt-4" style={{ borderTop: `1px dashed ${C.line}` }}>
       {hasSummary && <ExplBlock label="解説" text={entry.explanation} />}
-      {hasChoiceExpl && (
-        <div className="mt-3">
-          <div style={{ fontSize: 11, color: C.inkSoft, marginBottom: 6 }}>各肢の解説</div>
-          <div className="flex flex-col gap-2">
-            {Object.entries(entry.choices).map(([n, _text]) => {
-              if (!ce[n]) return null;
-              const isAnswer = entry.answer === n;
-              return (
-                <div key={n} className="flex items-start gap-2"
-                  style={{ fontSize: "calc(13px * var(--rs))", lineHeight: "calc(1.8 * var(--ls))", color: C.ink }}>
-                  <span style={{ flexShrink: 0, fontFamily: MINCHO, fontWeight: 700,
-                    color: isAnswer ? C.shu : C.inkSoft }}>{n}{isAnswer ? "○" : "×"}</span>
-                  <span style={{ color: C.inkSoft }}>{ce[n]}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      {hasSE && <ExplList title="各記述の解説" items={Object.entries(se)} note={comboNote} />}
+      {hasCE && <ExplList title="各肢の解説" items={Object.entries(ce)} />}
+    </div>
+  );
+}
+// 解説テキストの冒頭の判定語から ○/× を導く（誤り/妥当でない を先に判定）
+function verdictMark(text) {
+  const t = (text || "").trimStart();
+  if (/^(誤り|妥当でない|妥当ではない|適切でない|不適切|誤っている|×)/.test(t)) return "×";
+  if (/^(正しい|妥当|適切|○)/.test(t)) return "○";
+  return null;
+}
+function ExplList({ title, items, note }) {
+  return (
+    <div className="mt-3">
+      <div style={{ fontSize: 11, color: C.inkSoft, marginBottom: 6 }}>
+        {title}{note && <span style={{ marginLeft: 8, color: C.shu }}>{note}</span>}
+      </div>
+      <div className="flex flex-col gap-2">
+        {items.map(([n, text]) => {
+          if (!text) return null;
+          const m = verdictMark(text);
+          const col = m === "○" ? "#2e7d4f" : m === "×" ? C.shu : C.inkSoft; // ○=緑 / ×=朱
+          return (
+            <div key={n} className="flex items-start gap-2"
+              style={{ fontSize: "calc(13px * var(--rs))", lineHeight: "calc(1.8 * var(--ls))" }}>
+              <span style={{ flexShrink: 0, fontFamily: MINCHO, fontWeight: 700, color: col }}>{n}{m || ""}</span>
+              <span style={{ color: C.inkSoft }}>{text}</span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -981,28 +1001,53 @@ function OXItem({ entry, picked, submitted, onPick }) {
   );
 }
 
-function Tantou({ q, picked, setPicked, submitted }) {
+function Tantou({ q, picked, setPicked, submitted, marks = {}, setMark }) {
   return (
     <div className="flex flex-col gap-2">
       {Object.entries(q.choices).map(([n, text]) => {
         // 全員正解(没問)は選んだ肢を正解扱いで表示
         const isPicked = picked === n, isAnswer = q.all_correct ? isPicked : q.answer === n;
+        const mk = marks[n]; // 'keep' | 'eliminate' | undefined（候補マーク）
         let ring = "#cfc9ba", fill = "transparent", mark = "";
         if (submitted && isAnswer) { ring = C.shu; fill = C.shu; mark = "○"; }
         else if (submitted && isPicked && !isAnswer) { ring = C.shu; mark = "×"; }
         else if (isPicked) { ring = C.ink; fill = C.ink; }
+        const eliminated = mk === "eliminate" && !submitted;
         return (
-          <button key={n} className="opt text-left flex items-start gap-3"
-            onClick={() => !submitted && setPicked(n)} disabled={submitted}
-            style={{ background: isPicked && !submitted ? "#f4f1e7" : "#fff",
-              border: `1px solid ${submitted && (isAnswer || isPicked) ? "#e3b9b1" : "#e4dfd2"}`,
-              borderRadius: 4, padding: "11px 13px", cursor: submitted ? "default" : "pointer" }}>
-            <span style={{ flexShrink: 0, width: 24, height: 24, borderRadius: "50%",
-              border: `2px solid ${ring}`, background: fill, color: fill === "transparent" ? ring : "#fff",
-              display: "inline-flex", alignItems: "center", justifyContent: "center",
-              fontSize: 13, fontWeight: 700, marginTop: 1, fontFamily: MINCHO }}>{mark || n}</span>
-            <span style={{ fontFamily: MINCHO, fontSize: "calc(14.5px * var(--rs))", lineHeight: "calc(1.8 * var(--ls))" }}>{text}</span>
-          </button>
+          <div key={n} className="flex items-stretch gap-2">
+            <button className="opt text-left flex items-start gap-3"
+              onClick={() => !submitted && setPicked(n)} disabled={submitted}
+              style={{ flex: 1, minWidth: 0, background: isPicked && !submitted ? "#f4f1e7" : "#fff",
+                border: `1px solid ${mk === "keep" && !submitted ? C.ink : submitted && (isAnswer || isPicked) ? "#e3b9b1" : "#e4dfd2"}`,
+                borderRadius: 4, padding: "11px 13px", cursor: submitted ? "default" : "pointer", opacity: eliminated ? 0.45 : 1 }}>
+              <span style={{ flexShrink: 0, width: 24, height: 24, borderRadius: "50%",
+                border: `2px solid ${ring}`, background: fill, color: fill === "transparent" ? ring : "#fff",
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                fontSize: 13, fontWeight: 700, marginTop: 1, fontFamily: MINCHO }}>{mark || n}</span>
+              <span style={{ fontFamily: MINCHO, fontSize: "calc(14.5px * var(--rs))", lineHeight: "calc(1.8 * var(--ls))",
+                textDecoration: eliminated ? "line-through" : "none" }}>{text}</span>
+            </button>
+            {!submitted && setMark && <MarkControl value={mk} onChange={(v) => setMark(n, v)} />}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+// 候補マーク: ○候補 / ×候補 / 解除（縦3ボタン）。最終解答とは別の作業メモ。
+function MarkControl({ value, onChange }) {
+  const opts = [["keep", "○"], ["eliminate", "×"], [null, "−"]];
+  return (
+    <div className="flex flex-col" style={{ gap: 2, flexShrink: 0 }} role="group" aria-label="候補マーク">
+      {opts.map(([v, lbl]) => {
+        const active = value === v || (v === null && !value);
+        const col = v === "keep" ? "#2e7d4f" : v === "eliminate" ? C.shu : C.inkSoft;
+        return (
+          <button key={lbl} className="opt" onClick={(e) => { e.stopPropagation(); onChange(v); }}
+            aria-pressed={active}
+            style={{ width: 30, padding: "2px 0", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: GOTHIC,
+              borderRadius: 4, border: `1px solid ${active ? col : C.line}`,
+              background: active && v ? col : "#fff", color: active && v ? "#fff" : col }}>{lbl}</button>
         );
       })}
     </div>

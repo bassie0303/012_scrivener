@@ -21,6 +21,7 @@
   cp ../processed/questions.json ../../web/public/data/questions.json
 """
 import os
+import re
 import sys
 import json
 import time
@@ -31,16 +32,49 @@ MODEL = "claude-opus-4-8"
 SYSTEM = """あなたは行政書士試験の指導講師です。受験生向けに、正確で簡潔な日本語の解説を書きます。
 
 出力ルール:
-- 総合解説(summary): その問題のテーマ・論点、選択肢を見比べてどこで正誤が分かれるか、正解肢が際立つ理由、引っかけの注意点を100〜150字で。設問文をそのまま繰り返さない。
-- 肢別解説(choices): 各肢が正しいか誤りかを冒頭で示し、その根拠を条文番号や判例でピンポイントに50〜80字で。
+- 総合解説(summary): その問題のテーマ・論点、どこで正誤が分かれるか、正解が際立つ理由、引っかけの注意点を100〜150字で。設問文をそのまま繰り返さない。
+- 肢別解説(choices): 各肢が正しいか誤りかを冒頭で明示し（正しい肢は「正しい。」、誤りは「誤り。」で始める）、根拠を条文番号や判例でピンポイントに50〜80字で。
+- 記述別解説(statements): 組合せ問題用。本文中の各記述（ア・イ・…）について妥当か否かを冒頭で明示し（「妥当。」または「妥当でない。」で始める）、根拠を50〜80字で。提示された正解の組合せと必ず整合させる（正解の組合せに含まれる記述だけが妥当）。
 - 条文・判例は正確に。不確かな場合は条文番号を断定せず一般的な原則で説明する。
 - 事実誤認を避ける。誤った断定はしない。
 - 敬体は使わず、簡潔な常体（〜である／〜する）で書く。"""
+
+LABELS = "アイウエオ"
+
+
+def is_combo(choices):
+    """選択肢が『ア・イ』等の組合せかどうか。"""
+    vals = list((choices or {}).values())
+    return bool(vals) and all(re.search(r"[アイウエオ][・･]", v or "") for v in vals)
+
+
+def combo_labels(choices):
+    """組合せ選択肢に登場する記述ラベル（ア〜オ順）を返す。"""
+    seen = set()
+    for v in (choices or {}).values():
+        for c in LABELS:
+            if c in (v or ""):
+                seen.add(c)
+    return [c for c in LABELS if c in seen]
 
 
 def build_schema(q):
     """型に応じた構造化出力スキーマを作る。"""
     if q["type"] == "tantou5":
+        if is_combo(q.get("choices")):
+            labels = combo_labels(q.get("choices")) or ["ア", "イ", "ウ", "エ"]
+            return {
+                "type": "object", "additionalProperties": False,
+                "required": ["summary", "statements"],
+                "properties": {
+                    "summary": {"type": "string"},
+                    "statements": {
+                        "type": "object", "additionalProperties": False,
+                        "required": labels,
+                        "properties": {k: {"type": "string"} for k in labels},
+                    },
+                },
+            }
         keys = list(q.get("choices", {}).keys())
         return {
             "type": "object",
@@ -71,8 +105,20 @@ def build_user_text(q):
     if q["type"] == "tantou5":
         for n, t in q.get("choices", {}).items():
             lines.append(f"  {n}. {t}")
-        lines.append(f"【正解】{q.get('answer')}")
-        lines.append("各肢の正誤と根拠（choices）、および総合解説（summary）を書いてください。")
+        ans = q.get("answer")
+        if is_combo(q.get("choices")):
+            labels = combo_labels(q.get("choices"))
+            combo = (q.get("choices") or {}).get(ans, "")
+            lines.append(f"【正解の組合せ】{ans}（{combo}）")
+            lines.append(
+                f"これは組合せ問題です。本文中の各記述（{'・'.join(labels)}）それぞれについて、"
+                "妥当か否かを冒頭で明示し根拠を述べる解説（statements）と、総合解説（summary）を書いてください。"
+                "正解の組合せに含まれる記述だけが妥当になるよう必ず整合させること。"
+            )
+        else:
+            lines.append(f"【正解】{ans}")
+            lines.append("各肢の正誤と根拠（choices）、および総合解説（summary）を書いてください。"
+                         "正解の肢と矛盾しないようにすること。")
     elif q["type"] == "tashi":
         wb = "／".join(f"{n}:{t}" for n, t in q.get("word_bank", {}).items())
         lines.append(f"【語群】{wb}")
@@ -125,9 +171,17 @@ def main():
     with open(args.path, encoding="utf-8") as f:
         data = json.load(f)
 
+    def needs(q):
+        # 組合せ問題は statement_explanations、通常5択は choice_explanations、他は summary を要する
+        if q["type"] != "tantou5":
+            return not q.get("explanation")
+        if is_combo(q.get("choices")):
+            return not q.get("statement_explanations")
+        return not q.get("choice_explanations")
+
     # {年度:[...]} を順に処理
     flat = [(y, i, q) for y, qs in data.items() for i, q in enumerate(qs)]
-    todo = [t for t in flat if args.force or not t[2].get("explanation")]
+    todo = [t for t in flat if args.force or needs(t[2])]
     if args.limit:
         todo = todo[: args.limit]
 
@@ -144,7 +198,11 @@ def main():
                 time.sleep(2 * (2 ** attempt))  # 2,4,8,16秒
         if out is not None:
             data[y][i]["explanation"] = out["summary"].strip()
-            if q["type"] == "tantou5" and isinstance(out.get("choices"), dict):
+            if q["type"] == "tantou5" and isinstance(out.get("statements"), dict):
+                # 組合せ問題: 記述別解説を保存し、噛み合わない肢別解説は除去
+                data[y][i]["statement_explanations"] = {n: v.strip() for n, v in out["statements"].items()}
+                data[y][i].pop("choice_explanations", None)
+            elif q["type"] == "tantou5" and isinstance(out.get("choices"), dict):
                 data[y][i]["choice_explanations"] = {n: v.strip() for n, v in out["choices"].items()}
             done += 1
             print(f"  [{k}/{len(todo)}] {q['id']} ✓", file=sys.stderr)
