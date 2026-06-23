@@ -211,7 +211,7 @@ export default function GyoseiQuiz() {
         setSelectedYears(p.years || []);
         setStudyFilter(p.studyFilter || "all");
         if (p.order) setOrder(p.order);
-        setIdx(0); resetTransient();
+        resetTransient(); // idx は A-2 の復元に任せる（ここで先頭に戻さない）
       } else {
         // サーバー未保存なら、この端末の現在のフィルタを初期保存
         saveRemotePrefs({ mode, fields: selectedFields, years: selectedYears, studyFilter, order }).catch(() => {});
@@ -290,17 +290,19 @@ export default function GyoseiQuiz() {
   const entry = deck[idx];
   const rec = entry ? history[entry.id] : null;
 
-  // A-2: 直前に見ていた問題を再開（起動時、保存IDがデッキにあればその位置へ。1回だけ）
-  const savedQidRef = useRef(typeof localStorage !== "undefined" ? localStorage.getItem("lastQuestionId") : null);
-  const restoredRef = useRef(false);
+  // A-2: 直前に見ていた問題を再開。保存IDを「復元待ち」として持ち、デッキが（起動時の
+  // フィルタ復元やサーバー設定反映で）作り直されるたびに、保存IDがデッキにあればその位置へ。
+  // ユーザーが自分で移動/フィルタ変更したら復元待ちを解除する（pendingRestoreRef=null）。
+  const pendingRestoreRef = useRef(typeof localStorage !== "undefined" ? localStorage.getItem("lastQuestionId") : null);
   useEffect(() => {
-    if (restoredRef.current || !deck.length) return;
-    const id = savedQidRef.current;
-    if (id) {
-      const i = deck.findIndex((e) => e.id === id);
-      if (i >= 0) setIdx(i);
+    if (!deck.length) return;
+    const target = pendingRestoreRef.current;
+    if (target) {
+      const i = deck.findIndex((e) => e.id === target);
+      if (i >= 0) { setIdx((cur) => (cur === i ? cur : i)); return; }
     }
-    restoredRef.current = true;
+    // 復元対象が無い/見つからない場合、idx がデッキ範囲外なら先頭へクランプ
+    setIdx((cur) => (cur > deck.length - 1 ? 0 : cur));
   }, [deck]);
   // 現在の問題IDを端末に保存（次回起動で復元）。UI状態なので localStorage で可。
   useEffect(() => {
@@ -358,7 +360,7 @@ export default function GyoseiQuiz() {
     return { combo, polarity };
   }, [questions]);
 
-  function rebuildDeck() { setIdx(0); resetTransient(); setDeckNonce((n) => n + 1); }
+  function rebuildDeck() { pendingRestoreRef.current = null; setIdx(0); resetTransient(); setDeckNonce((n) => n + 1); }
   function applyFields(next) { setSelectedFields(next); rebuildDeck(); }
   function applyYears(next) { setSelectedYears(next); rebuildDeck(); }
   function applyStudyFilter(s) { setStudyFilter(s); rebuildDeck(); }
@@ -373,6 +375,7 @@ export default function GyoseiQuiz() {
   }, [allYears, allFields]); // eslint-disable-line react-hooks/exhaustive-deps
   // 集計画面から「この分野を弱点学習」: 分野を絞り+間違い/未挑戦中心に出題
   function studyField(field) {
+    pendingRestoreRef.current = null;
     setSelectedFields([field]); setStudyFilter("wrong"); setView("quiz");
     setMode("tantou5"); setIdx(0); resetTransient(); setDeckNonce((n) => n + 1);
   }
@@ -400,10 +403,11 @@ export default function GyoseiQuiz() {
     setSubmitted(false); setResult(null);
   }
   function go(delta) {
+    pendingRestoreRef.current = null; // ユーザーが移動したら復元待ちを解除
     const n = Math.min(Math.max(idx + delta, 0), deck.length - 1);
     setIdx(n); resetTransient();
   }
-  function switchMode(m) { setMode(m); setIdx(0); resetTransient(); }
+  function switchMode(m) { pendingRestoreRef.current = null; setMode(m); setIdx(0); resetTransient(); }
 
   function judge() {
     let correct = null, chosen = null, res = null;
