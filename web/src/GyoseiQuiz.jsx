@@ -552,7 +552,7 @@ export default function GyoseiQuiz() {
             <OXItem entry={entry} picked={picked} submitted={submitted} onPick={judgeOX} />
           ) : (
             <>
-              <p style={{ fontFamily: MINCHO, fontSize: "calc(16px * var(--rs))", lineHeight: "calc(1.9 * var(--ls))", margin: "0 0 18px", whiteSpace: "pre-wrap" }}>{entry.stem}</p>
+              <p style={{ fontFamily: MINCHO, fontSize: "calc(16px * var(--rs))", lineHeight: "calc(1.9 * var(--ls))", margin: "0 0 18px", whiteSpace: "pre-wrap" }}>{formatStem(entry.stem)}</p>
               {entry.reference && (
                 <div style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 3, padding: "10px 12px", fontSize: "calc(13px * var(--rs))", lineHeight: "calc(1.8 * var(--ls))", color: C.inkSoft, margin: "0 0 18px" }}>
                   <span style={{ color: C.ink, fontWeight: 700 }}>参照条文　</span>{entry.reference}
@@ -1120,6 +1120,12 @@ function Kijutsu({ q, revealed, setRevealed }) {
   );
 }
 
+// 本文中の「ア 」「イ 」… のように空白が続く記述ラベルの前で改行して見やすくする。
+// ラベル直後に空白があるものだけ対象にし、アメリカ/イギリス等の語中カタカナは誤検出しない。
+function formatStem(s) {
+  if (!s) return s;
+  return s.replace(/[ 　]*([アイウエオ][ 　])/g, "\n$1").replace(/^\s+/, "");
+}
 function labelOf(t) { return t === "tantou5" ? "5肢択一" : t === "tashi" ? "多肢選択" : "記述式"; }
 function navBtn(d) { return { background: "transparent", color: d ? "#b9bcc6" : C.ink, border: "none", fontSize: 14, cursor: d ? "default" : "pointer", padding: "8px 4px", fontFamily: GOTHIC }; }
 function submitBtn(d) { return { background: d ? "#c2c6d0" : C.ink, color: "#fff", border: "none", borderRadius: 4, padding: "10px 22px", fontSize: 14, fontWeight: 700, cursor: d ? "default" : "pointer", fontFamily: GOTHIC }; }
